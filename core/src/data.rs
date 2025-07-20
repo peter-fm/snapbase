@@ -1,0 +1,1514 @@
+//! Data processing utilities using DuckDB
+
+use crate::error::Result;
+use crate::hash::ColumnInfo;
+use crate::sql;
+use blake3;
+use duckdb::Connection;
+use std::collections::HashMap;
+use std::path::Path;
+
+// Type alias for complex return types
+type DataChangeResult = (Vec<(Vec<String>, bool, bool, bool)>, Vec<crate::hash::ColumnInfo>);
+
+fn get_duckdb_install_instructions() -> String {
+    if cfg!(target_os = "windows") {
+        r#"  Windows:
+    Download and install the DuckDB library (not the CLI):
+    
+    curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/latest/download/libduckdb-windows-amd64.zip
+    7z x duckdb.zip
+    mkdir "C:\Program Files\DuckDB\lib"
+    mkdir "C:\Program Files\DuckDB\include"
+    copy duckdb.dll "C:\Program Files\DuckDB\lib\"
+    copy duckdb.lib "C:\Program Files\DuckDB\lib\"
+    copy duckdb.h "C:\Program Files\DuckDB\include\"
+    
+    Then add C:\Program Files\DuckDB\lib to your PATH environment variable."#.to_string()
+    } else if cfg!(target_os = "macos") {
+        r#"  macOS:
+    Unbundled builds are not available for macOS due to cross-compilation complexity.
+    Please use the bundled version or build from source:
+    
+    # Use bundled version (recommended):
+    curl -L -o snapbase "https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-arm64-bundled"
+    
+    # Or build from source:
+    cargo build --release --features bundled"#.to_string()
+    } else {
+        r#"  Linux:
+    Install the DuckDB library (libduckdb):
+    
+    # Manual installation (recommended):
+    # Linux:
+    wget https://github.com/duckdb/duckdb/releases/latest/download/libduckdb-linux-amd64.zip
+    unzip libduckdb-linux-amd64.zip
+    sudo cp libduckdb.so /usr/local/lib/
+    sudo cp duckdb.h /usr/local/include/
+    sudo ldconfig
+    
+    # Package manager (if available):
+    # Ubuntu/Debian: sudo apt update && sudo apt install libduckdb-dev
+    # Fedora: sudo dnf install duckdb-devel
+    
+    # macOS:
+    brew install duckdb
+    
+    # Windows:
+    # Download from https://duckdb.org/docs/installation/
+    # Extract to C:\\Program Files\\DuckDB\\
+    # Note: Package manager versions may be outdated"#.to_string()
+    }
+}
+
+/// Data processor for various file formats
+pub struct DataProcessor {
+    pub connection: Connection,
+    cached_columns: Option<Vec<ColumnInfo>>,
+    streaming_query: Option<String>,
+    database_type: Option<DatabaseType>,
+}
+
+/// Database type for identifier quoting
+#[derive(Debug, Clone)]
+pub enum DatabaseType {
+    MySQL,
+    PostgreSQL,
+    SQLite,
+    DuckDB,
+}
+
+impl DataProcessor {
+    /// Create a new data processor with default settings
+    pub fn new() -> Result<Self> {
+        Self::new_with_config()
+    }
+
+    /// Get database-specific identifier quoting
+    fn quote_identifier(&self, identifier: &str) -> String {
+        match &self.database_type {
+            Some(DatabaseType::MySQL) => format!("`{}`", identifier),
+            Some(DatabaseType::PostgreSQL) => format!("\"{}\"", identifier),
+            Some(DatabaseType::SQLite) => format!("\"{}\"", identifier),
+            Some(DatabaseType::DuckDB) | None => format!("\"{}\"", identifier),
+        }
+    }
+
+    /// Detect database type from connection string
+    fn detect_database_type(connection_string: &str) -> Option<DatabaseType> {
+        let connection_upper = connection_string.to_uppercase();
+        
+        if connection_upper.contains("MYSQL") || connection_upper.contains("TYPE MYSQL") {
+            Some(DatabaseType::MySQL)
+        } else if connection_upper.contains("POSTGRES") || connection_upper.contains("TYPE POSTGRES") {
+            Some(DatabaseType::PostgreSQL)
+        } else if connection_upper.contains("SQLITE") || connection_upper.contains("TYPE SQLITE") {
+            Some(DatabaseType::SQLite)
+        } else {
+            // Default to DuckDB
+            Some(DatabaseType::DuckDB)
+        }
+    }
+
+    /// Create a new data processor with workspace configuration
+    pub fn new_with_workspace(workspace: &crate::workspace::SnapbaseWorkspace) -> Result<Self> {
+        let connection = crate::query_engine::create_configured_connection(workspace)?;
+        
+        Ok(Self { 
+            connection, 
+            cached_columns: None,
+            streaming_query: None,
+            database_type: None,
+        })
+    }
+
+    /// Create a new data processor with custom configuration
+    pub fn new_with_config() -> Result<Self> {
+        let connection = match Connection::open_in_memory() {
+            Ok(conn) => conn,
+            Err(e) => {
+                // Check if this is a DuckDB library loading error
+                let error_msg = e.to_string();
+                if error_msg.contains("libduckdb") || error_msg.contains("duckdb.dll") || error_msg.contains("cannot open shared object") {
+                    let install_instructions = get_duckdb_install_instructions();
+                    eprintln!("❌ DuckDB library not found!");
+                    eprintln!();
+                    eprintln!("This version of snapbase requires DuckDB to be installed on your system.");
+                    eprintln!();
+                    eprintln!("📦 Install DuckDB:");
+                    eprintln!("{install_instructions}");
+                    eprintln!();
+                    eprintln!("💡 Alternatively, download the bundled version that includes DuckDB:");
+                    eprintln!("   Visit: https://github.com/peter-fm/snapbase/releases/latest");
+                    eprintln!();
+                    eprintln!("   For your platform, download the file ending with '-bundled' instead.");
+                    eprintln!();
+                    eprintln!("Original error: {error_msg}");
+                    std::process::exit(1);
+                }
+                return Err(e.into());
+            }
+        };
+        
+        // Optimize DuckDB for large datasets and performance
+        connection.execute("SET memory_limit='8GB'", [])?;  // Increased from 4GB
+        // DuckDB auto-detects optimal thread count by default, no need to set explicitly
+        connection.execute("SET enable_progress_bar=false", [])?; // Disable for performance
+        connection.execute("SET preserve_insertion_order=false", [])?; // Allow reordering for performance
+        connection.execute("SET enable_object_cache=true", [])?; // Enable object caching
+        // Configure platform-appropriate temp directory
+        let temp_dir = if cfg!(target_os = "windows") {
+            std::env::var("TEMP").or_else(|_| std::env::var("TMP")).unwrap_or_else(|_| "C:\\temp".to_string())
+        } else {
+            "/tmp".to_string()
+        };
+        connection.execute(&format!("SET temp_directory='{temp_dir}'"), [])?;
+        connection.execute("SET max_memory='8GB'", [])?; // Set max memory usage
+        connection.execute("SET force_compression='auto'", [])?; // Enable compression for temp data
+        
+        Ok(Self { 
+            connection, 
+            cached_columns: None,
+            streaming_query: None,
+            database_type: None,
+        })
+    }
+
+    /// Load data from file and return basic info
+    pub fn load_file(&mut self, file_path: &Path) -> Result<DataInfo> {
+        // Check if this is a SQL file
+        if sql::is_sql_file(file_path) {
+            return self.load_sql_file(file_path);
+        }
+        
+        // Validate file exists and is readable
+        if !file_path.exists() {
+            return Err(crate::error::SnapbaseError::invalid_input(
+                format!("File not found: {}", file_path.display())
+            ));
+        }
+
+        if !file_path.is_file() && !file_path.is_dir() {
+            return Err(crate::error::SnapbaseError::invalid_input(
+                format!("Path is neither a file nor a directory: {}", file_path.display())
+            ));
+        }
+
+        let path_str = file_path.to_string_lossy();
+        
+        // Create a view of the file with proper error handling
+        let create_view_sql = format!(
+            "CREATE OR REPLACE VIEW data_view AS SELECT * FROM '{path_str}'"
+        );
+        
+        self.connection.execute(&create_view_sql, [])
+            .map_err(|e| self.convert_duckdb_error(e, file_path))?;
+        
+        // Get row count with error handling
+        let row_count: u64 = self.connection
+            .prepare("SELECT COUNT(*) FROM data_view")
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare row count query: {e}")
+            ))?
+            .query_row([], |row| row.get(0))
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to get row count: {e}")
+            ))?;
+        
+        // Get column information
+        let columns = self.get_column_info()?;
+        
+        Ok(DataInfo {
+            source: file_path.to_path_buf(),
+            row_count,
+            columns,
+        })
+    }
+
+    /// Load data from SQL file with database connection
+    pub fn load_sql_file(&mut self, file_path: &Path) -> Result<DataInfo> {
+        // Load environment variables
+        sql::load_env_file()?;
+        
+        // Parse the SQL file
+        let sql_file = sql::parse_sql_file(file_path)?;
+        
+        // Substitute environment variables in the connection string
+        let connection_string = sql::substitute_env_vars(&sql_file.connection_string)?;
+        
+        // Execute the connection string to attach the database (if provided)
+        if !connection_string.is_empty() {
+            // Detect database type from connection string
+            self.database_type = Self::detect_database_type(&connection_string);
+            
+            self.connection.execute(&connection_string, [])
+                .map_err(|e| crate::error::SnapbaseError::data_processing(
+                    format!("Failed to execute connection string '{connection_string}': {e}")
+                ))?;
+        }
+        
+        // Parse the content again to get setup statements and the SELECT query
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| crate::error::SnapbaseError::invalid_input(
+                format!("Failed to read SQL file '{}': {}", file_path.display(), e)
+            ))?;
+        
+        // Split by semicolons to get individual statements
+        let statements: Vec<&str> = content.split(';').collect();
+        let mut setup_statements = Vec::new();
+        let mut select_query = String::new();
+        
+        for statement in statements {
+            let trimmed = statement.trim();
+            
+            // Skip empty statements
+            if trimmed.is_empty() {
+                continue;
+            }
+            
+            // Remove any comment lines from the statement
+            let cleaned_statement = trimmed.lines()
+                .filter(|line| !line.trim().starts_with("--") && !line.trim().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string();
+            
+            if cleaned_statement.is_empty() {
+                continue;
+            }
+            
+            // Check if this is a SELECT query or CTE (Common Table Expression)
+            let upper_statement = cleaned_statement.to_uppercase();
+            if (upper_statement.starts_with("SELECT") || upper_statement.starts_with("WITH")) && 
+               !upper_statement.contains("CREATE TABLE") {
+                select_query = cleaned_statement;
+            } else {
+                setup_statements.push(cleaned_statement);
+            }
+        }
+        
+        // Execute setup statements first
+        for statement in setup_statements {
+            if !statement.is_empty() {
+                self.connection.execute(&statement, [])
+                    .map_err(|e| crate::error::SnapbaseError::data_processing(
+                        format!("Failed to execute setup statement '{statement}': {e}")
+                    ))?;
+            }
+        }
+        
+        // For SQL queries, use streaming approach to handle large datasets efficiently
+        if select_query.trim().is_empty() {
+            return Err(crate::error::SnapbaseError::invalid_input(
+                format!("No SELECT query found in SQL file '{}'", file_path.display())
+            ));
+        }
+        
+        // First, get the row count and column info without materializing all data
+        let count_query = format!("SELECT COUNT(*) FROM ({})", select_query.trim());
+        let row_count: u64 = self.connection
+            .prepare(&count_query)
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare row count query: {e}")
+            ))?
+            .query_row([], |row| row.get(0))
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to get row count: {e}")
+            ))?;
+        
+        // Get column information by creating a temporary view with LIMIT 0
+        let temp_view_sql = format!(
+            "CREATE OR REPLACE VIEW temp_schema_view AS SELECT * FROM ({}) AS query_result LIMIT 0",
+            select_query.trim()
+        );
+        
+        self.connection.execute(&temp_view_sql, [])
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to create temporary view for schema: {e}")
+            ))?;
+        
+        // Get column information from the temporary view and cache it
+        let columns = self.get_column_info_from_view("temp_schema_view")?;
+        
+        // Cache the columns for streaming queries since we won't have data_view
+        self.cached_columns = Some(columns.clone());
+        
+        // Clean up temporary view
+        self.connection.execute("DROP VIEW IF EXISTS temp_schema_view", [])
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to drop temporary view: {e}")
+            ))?;
+        
+        // Store the original SELECT query for streaming use
+        self.streaming_query = Some(select_query.trim().to_string());
+        
+        Ok(DataInfo {
+            source: file_path.to_path_buf(),
+            row_count,
+            columns,
+        })
+    }
+
+    /// Convert DuckDB errors to appropriate SnapbaseError types
+    fn convert_duckdb_error(&self, error: duckdb::Error, file_path: &Path) -> crate::error::SnapbaseError {
+        let error_msg = error.to_string();
+        
+        // Detect common file format issues
+        if error_msg.contains("CSV Error") || 
+           error_msg.contains("Could not convert") ||
+           error_msg.contains("Invalid CSV") ||
+           error_msg.contains("Unterminated quoted field") {
+            crate::error::SnapbaseError::invalid_input(
+                format!("Malformed CSV file '{}': {}", file_path.display(), error_msg)
+            )
+        } else if error_msg.contains("JSON") || error_msg.contains("Malformed JSON") {
+            crate::error::SnapbaseError::invalid_input(
+                format!("Malformed JSON file '{}': {}", file_path.display(), error_msg)
+            )
+        } else if error_msg.contains("No files found") || error_msg.contains("does not exist") {
+            crate::error::SnapbaseError::invalid_input(
+                format!("File not found: {}", file_path.display())
+            )
+        } else if error_msg.contains("Permission denied") {
+            crate::error::SnapbaseError::invalid_input(
+                format!("Permission denied accessing file: {}", file_path.display())
+            )
+        } else if error_msg.contains("UTF-8") || error_msg.contains("encoding") {
+            crate::error::SnapbaseError::invalid_input(
+                format!("File encoding error '{}': {}", file_path.display(), error_msg)
+            )
+        } else {
+            // For other DuckDB errors, pass through the original error message
+            crate::error::SnapbaseError::DuckDb(error)
+        }
+    }
+
+    /// Get column information from the current view (cached to avoid repeated calls)
+    fn get_column_info(&mut self) -> Result<Vec<ColumnInfo>> {
+        self.get_column_info_from_view("data_view")
+    }
+
+    /// Get column information from a specific view (cached to avoid repeated calls)
+    fn get_column_info_from_view(&mut self, view_name: &str) -> Result<Vec<ColumnInfo>> {
+        // Return cached columns if available (for data_view only)
+        if view_name == "data_view" {
+            if let Some(ref columns) = self.cached_columns {
+                return Ok(columns.clone());
+            }
+        }
+
+        // First, get column names in their original order using DESCRIBE
+        let describe_sql = format!("DESCRIBE {view_name}");
+        let mut stmt = self.connection.prepare(&describe_sql)
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare describe query for '{view_name}': {e}")
+            ))?;
+            
+        let rows = stmt.query_map([], |row| {
+            Ok(ColumnInfo {
+                name: row.get::<_, String>(0)?,           // column_name
+                data_type: row.get::<_, String>(1)?,      // column_type
+                nullable: true, // DESCRIBE doesn't provide nullable info, default to true
+            })
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to query column info: {e}")
+        ))?;
+        
+        let mut columns = Vec::new();
+        for row in rows {
+            columns.push(row.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process column info row: {e}")
+            ))?);
+        }
+        
+        // Cache the columns for future calls (only for data_view)
+        if view_name == "data_view" {
+            self.cached_columns = Some(columns.clone());
+        }
+        
+        Ok(columns)
+    }
+
+    /// Extract all data as rows of strings
+    pub fn extract_all_data(&mut self) -> Result<Vec<Vec<String>>> {
+        self.extract_data_chunked_with_progress(None)
+    }
+
+    /// Extract data in chunks with progress reporting for better memory efficiency
+    pub fn extract_data_chunked_with_progress(
+        &mut self,
+        progress_callback: Option<&dyn Fn(u64, u64)>,
+    ) -> Result<Vec<Vec<String>>> {
+        // Check if this is a streaming SQL query
+        if let Some(ref query) = self.streaming_query.clone() {
+            return self.extract_streaming_data_with_progress(query, progress_callback);
+        }
+
+        // Regular file-based extraction
+        self.extract_regular_data_with_progress(progress_callback)
+    }
+
+    /// Extract data from regular files (CSV, Parquet, etc.) with chunking
+    fn extract_regular_data_with_progress(
+        &mut self,
+        progress_callback: Option<&dyn Fn(u64, u64)>,
+    ) -> Result<Vec<Vec<String>>> {
+        // First, get column information to determine the number of columns safely
+        let columns = self.get_column_info()?;
+        let column_count = columns.len();
+        
+        if column_count == 0 {
+            return Ok(Vec::new()); // No columns, return empty data
+        }
+
+        // Get total row count for progress reporting
+        let total_rows: u64 = self.connection
+            .prepare("SELECT COUNT(*) FROM data_view")?
+            .query_row([], |row| row.get(0))?;
+
+        if total_rows == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut all_data = Vec::with_capacity(total_rows as usize); // Pre-allocate the entire vector to prevent reallocations
+        let mut processed_rows = 0u64;
+
+        // No chunking needed - use streaming approach
+
+        // Execute the full query once and stream through results (no LIMIT/OFFSET)
+        let mut stmt = self.connection.prepare("SELECT * FROM data_view")
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare streaming data query: {e}")
+            ))?;
+
+        let rows = stmt.query_map([], |row| {
+            let mut string_row = Vec::with_capacity(column_count);
+            for i in 0..column_count {
+                let value: String = match row.get_ref(i)? {
+                    duckdb::types::ValueRef::Null => String::new(),
+                    duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                    duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Int(i) => i.to_string(),
+                    duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Float(f) => f.to_string(),
+                    duckdb::types::ValueRef::Double(f) => f.to_string(),
+                    duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                    duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                    duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
+                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
+                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    _ => "<unknown>".to_string(),
+                };
+                string_row.push(value);
+            }
+            Ok(string_row)
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to stream data query: {e}")
+        ))?;
+
+        for row_result in rows {
+            let row = row_result.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process streaming row: {e}")
+            ))?;
+            
+            all_data.push(row);
+            processed_rows += 1;
+
+            // Report progress at regular intervals for better performance
+            if let Some(callback) = progress_callback {
+                if processed_rows % 50000 == 0 || processed_rows >= total_rows {
+                    callback(processed_rows, total_rows);
+                }
+            }
+        }
+        
+        Ok(all_data)
+    }
+
+    /// Extract data from streaming SQL queries with chunking for memory efficiency
+    fn extract_streaming_data_with_progress(
+        &mut self,
+        query: &str,
+        progress_callback: Option<&dyn Fn(u64, u64)>,
+    ) -> Result<Vec<Vec<String>>> {
+        // Get column information
+        let columns = self.get_column_info()?;
+        let column_count = columns.len();
+        
+        if column_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Get total row count without materializing data
+        let count_query = format!("SELECT COUNT(*) FROM ({query})");
+        let total_rows: u64 = self.connection
+            .prepare(&count_query)?
+            .query_row([], |row| row.get(0))?;
+
+        if total_rows == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut all_data = Vec::with_capacity(total_rows as usize); // Pre-allocate the entire vector to prevent reallocations
+
+        // For better performance with large datasets, execute the full query once 
+        // and stream through the result set instead of using LIMIT/OFFSET
+        let mut stmt = self.connection.prepare(query)
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare streaming query: {e}")
+            ))?;
+
+        let rows = stmt.query_map([], |row| {
+            let mut string_row = Vec::with_capacity(column_count);
+            for i in 0..column_count {
+                let value: String = match row.get_ref(i)? {
+                    duckdb::types::ValueRef::Null => String::new(),
+                    duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                    duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Int(i) => i.to_string(),
+                    duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Float(f) => f.to_string(),
+                    duckdb::types::ValueRef::Double(f) => f.to_string(),
+                    duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                    duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                    duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
+                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
+                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    _ => "<unknown>".to_string(),
+                };
+                string_row.push(value);
+            }
+            Ok(string_row)
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to stream query data: {e}")
+        ))?;
+
+        let mut processed_rows = 0u64;
+        let update_frequency = 50_000; // Report progress every 50K rows for smooth updates
+
+        for row_result in rows {
+            let row = row_result.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process streaming row: {e}")
+            ))?;
+            
+            all_data.push(row);
+            processed_rows += 1;
+
+            // Report progress at regular intervals
+            if let Some(callback) = progress_callback {
+                if processed_rows % update_frequency == 0 || processed_rows >= total_rows {
+                    callback(processed_rows, total_rows);
+                }
+            }
+        }
+        
+        Ok(all_data)
+    }
+
+    /// Export current data to Parquet file using DuckDB COPY
+    pub fn export_to_parquet(&mut self, parquet_path: &Path) -> Result<()> {
+        self.export_to_parquet_with_flags(parquet_path, None)
+    }
+
+    /// Export current data to Parquet file with optional change detection flags
+    pub fn export_to_parquet_with_flags(
+        &mut self, 
+        parquet_path: &Path, 
+        baseline_data: Option<&BaselineData>
+    ) -> Result<()> {
+        // Get current data and schema
+        let current_schema = self.get_column_info()?;
+        let current_data = self.extract_all_data()?;
+        
+        // Compute flags using existing change detection system
+        let (flag_data, final_schema) = if let Some(baseline) = baseline_data {
+            self.compute_flags_with_change_detection(&baseline.schema, &baseline.data, &current_schema, &current_data)?
+        } else {
+            // No baseline - all rows are considered "added" (first snapshot)
+            let flag_data: Vec<(Vec<String>, bool, bool, bool)> = current_data.into_iter()
+                .map(|row| (row, false, true, false)) // (data, removed, added, modified)
+                .collect();
+            let mut final_schema = current_schema.clone();
+            final_schema.extend(vec![
+                crate::hash::ColumnInfo { name: "__snapbase_removed".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
+                crate::hash::ColumnInfo { name: "__snapbase_added".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
+                crate::hash::ColumnInfo { name: "__snapbase_modified".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
+            ]);
+            (flag_data, final_schema)
+        };
+        
+        // Create a temporary table with the flag data
+        self.create_temp_table_with_flags(&final_schema, &flag_data)?;
+        
+        // Export to Parquet using DuckDB's COPY command
+        let copy_sql = format!(
+            "COPY (SELECT * FROM temp_flag_data) TO '{}' (FORMAT parquet)",
+            parquet_path.to_string_lossy()
+        );
+        
+        self.connection.execute(&copy_sql, [])?;
+        
+        Ok(())
+    }
+
+    /// Compute flags using the existing change detection system
+    fn compute_flags_with_change_detection(
+        &self,
+        baseline_schema: &[crate::hash::ColumnInfo],
+        baseline_data: &[Vec<String>],
+        current_schema: &[crate::hash::ColumnInfo],
+        current_data: &[Vec<String>],
+    ) -> Result<DataChangeResult> {
+        // Use the existing change detection system
+        let changes = crate::change_detection::ChangeDetector::detect_changes(
+            baseline_schema,
+            baseline_data,
+            current_schema,
+            current_data,
+        )?;
+        
+        
+        // Create flag mappings for current data rows
+        let mut current_row_flags: std::collections::HashMap<usize, (bool, bool, bool)> = std::collections::HashMap::new();
+        
+        // Mark added rows (row_index refers to current data position)
+        for addition in &changes.row_changes.added {
+            current_row_flags.insert(addition.row_index as usize, (false, true, false)); // (removed, added, modified)
+        }
+        
+        // Mark modified rows (row_index refers to current data position)
+        for modification in &changes.row_changes.modified {
+            // Check if this is a "total change" (all non-ID fields changed) - treat as addition
+            let total_fields_changed = modification.changes.len();
+            let total_fields = current_schema.len();
+            
+            if total_fields_changed >= total_fields * 2 / 3 {
+                // If most fields changed, treat as addition (assume this is a new row)
+                current_row_flags.insert(modification.row_index as usize, (false, true, false)); // (removed, added, modified)
+            } else {
+                current_row_flags.insert(modification.row_index as usize, (false, false, true)); // (removed, added, modified)
+            }
+        }
+        
+        // Create result data with flags
+        let mut flag_data = Vec::new();
+        
+        // Add current data rows with their flags
+        for (index, row) in current_data.iter().enumerate() {
+            let flags = current_row_flags.get(&index).unwrap_or(&(false, false, false));
+            flag_data.push((row.clone(), flags.0, flags.1, flags.2));
+        }
+        
+        // Add removed rows (row_index refers to baseline data position)
+        for removal in &changes.row_changes.removed {
+            if let Some(baseline_row) = baseline_data.get(removal.row_index as usize) {
+                // Convert baseline row to match current schema by padding or truncating as needed
+                let mut converted_row = Vec::new();
+                for current_col in current_schema.iter() {
+                    // Try to find this column in baseline schema
+                    if let Some(baseline_col_idx) = baseline_schema.iter().position(|col| col.name == current_col.name) {
+                        // Column exists in baseline, use its value
+                        if let Some(value) = baseline_row.get(baseline_col_idx) {
+                            converted_row.push(value.clone());
+                        } else {
+                            converted_row.push("".to_string()); // Default empty value
+                        }
+                    } else {
+                        // Column doesn't exist in baseline, use empty value
+                        converted_row.push("".to_string());
+                    }
+                }
+                flag_data.push((converted_row, true, false, false)); // (removed, added, modified)
+            }
+        }
+        
+        // Create final schema with flag columns
+        let mut final_schema = current_schema.to_vec();
+        final_schema.extend(vec![
+            crate::hash::ColumnInfo { name: "__snapbase_removed".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
+            crate::hash::ColumnInfo { name: "__snapbase_added".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
+            crate::hash::ColumnInfo { name: "__snapbase_modified".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
+        ]);
+        
+        Ok((flag_data, final_schema))
+    }
+
+    /// Create a temporary table with flag data
+    fn create_temp_table_with_flags(
+        &mut self,
+        schema: &[crate::hash::ColumnInfo],
+        flag_data: &[(Vec<String>, bool, bool, bool)],
+    ) -> Result<()> {
+        // Drop existing temp table
+        self.connection.execute("DROP TABLE IF EXISTS temp_flag_data", [])?;
+        
+        // Create table schema
+        let mut create_sql = String::from("CREATE TABLE temp_flag_data (");
+        for (i, col) in schema.iter().enumerate() {
+            if i > 0 {
+                create_sql.push_str(", ");
+            }
+            create_sql.push_str(&format!("{} {}", col.name, col.data_type));
+        }
+        create_sql.push(')');
+        
+        self.connection.execute(&create_sql, [])?;
+        
+        // Insert data
+        if !flag_data.is_empty() {
+            for (row_data, removed, added, modified) in flag_data {
+                let mut insert_sql = String::from("INSERT INTO temp_flag_data VALUES (");
+                
+                // Add original data columns
+                for (j, value) in row_data.iter().enumerate() {
+                    if j > 0 {
+                        insert_sql.push_str(", ");
+                    }
+                    insert_sql.push_str(&format!("'{}'", value.replace("'", "''")));
+                }
+                
+                // Add flag columns
+                insert_sql.push_str(&format!(", {removed}, {added}, {modified}"));
+                insert_sql.push(')');
+                
+                self.connection.execute(&insert_sql, [])?;
+            }
+        }
+        
+        Ok(())
+    }
+
+
+    /// Load baseline data into a temporary table for comparison
+    pub fn load_baseline_data(&mut self, baseline: &BaselineData) -> Result<()> {
+        // Drop existing baseline table if it exists
+        self.connection.execute("DROP TABLE IF EXISTS baseline_data", [])?;
+        
+        // Create baseline table with same structure as current data
+        let mut create_sql = String::from("CREATE TABLE baseline_data (");
+        for (i, col) in baseline.schema.iter().enumerate() {
+            if i > 0 {
+                create_sql.push_str(", ");
+            }
+            create_sql.push_str(&format!("{} {}", col.name, col.data_type));
+        }
+        create_sql.push(')');
+        
+        self.connection.execute(&create_sql, [])?;
+        
+        // Insert baseline data
+        if !baseline.data.is_empty() {
+            let mut insert_sql = String::from("INSERT INTO baseline_data VALUES ");
+            for (row_idx, row) in baseline.data.iter().enumerate() {
+                if row_idx > 0 {
+                    insert_sql.push_str(", ");
+                }
+                insert_sql.push('(');
+                for (col_idx, value) in row.iter().enumerate() {
+                    if col_idx > 0 {
+                        insert_sql.push_str(", ");
+                    }
+                    insert_sql.push_str(&format!("'{}'", value.replace("'", "''")));
+                }
+                insert_sql.push(')');
+            }
+            
+            self.connection.execute(&insert_sql, [])?;
+        }
+        
+        Ok(())
+    }
+
+    /// Stream data row by row with callback for memory efficiency
+    pub fn stream_data_with_progress<F>(
+        &mut self,
+        mut row_callback: F,
+        progress_callback: Option<&dyn Fn(u64, u64)>,
+    ) -> Result<u64>
+    where
+        F: FnMut(Vec<String>) -> Result<()>,
+    {
+        // Get column information
+        let columns = self.get_column_info()?;
+        let column_count = columns.len();
+        
+        if column_count == 0 {
+            return Ok(0);
+        }
+
+        // Get total row count
+        let total_rows = if let Some(ref query) = self.streaming_query.clone() {
+            let count_query = format!("SELECT COUNT(*) FROM ({query})");
+            self.connection
+                .prepare(&count_query)?
+                .query_row([], |row| row.get(0))?
+        } else {
+            self.connection
+                .prepare("SELECT COUNT(*) FROM data_view")?
+                .query_row([], |row| row.get(0))?
+        };
+
+        if total_rows == 0 {
+            return Ok(0);
+        }
+
+        let mut processed_rows = 0u64;
+
+        if let Some(ref query) = self.streaming_query.clone() {
+            // Stream SQL query results
+            let mut stmt = self.connection.prepare(query)?;
+            
+            let rows = stmt.query_map([], |row| {
+                let mut string_row = Vec::with_capacity(column_count);
+                for i in 0..column_count {
+                    let value: String = match row.get_ref(i)? {
+                        duckdb::types::ValueRef::Null => String::new(),
+                        duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                        duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::Int(i) => i.to_string(),
+                        duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::Float(f) => f.to_string(),
+                        duckdb::types::ValueRef::Double(f) => f.to_string(),
+                        duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                        duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                        duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                        duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
+                        duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
+                        duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                        _ => "<unknown>".to_string(),
+                    };
+                    string_row.push(value);
+                }
+                Ok(string_row)
+            })?;
+            
+            for row_result in rows {
+                let row = row_result?;
+                row_callback(row)?;
+                processed_rows += 1;
+                
+                // Report progress
+                if let Some(callback) = progress_callback {
+                    if processed_rows % 50000 == 0 || processed_rows >= total_rows {
+                        callback(processed_rows, total_rows);
+                    }
+                }
+            }
+        } else {
+            // Stream from data_view for regular files
+            let mut stmt = self.connection.prepare("SELECT * FROM data_view")?;
+            
+            let rows = stmt.query_map([], |row| {
+                let mut string_row = Vec::with_capacity(column_count);
+                for i in 0..column_count {
+                    let value: String = match row.get_ref(i)? {
+                        duckdb::types::ValueRef::Null => String::new(),
+                        duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                        duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::Int(i) => i.to_string(),
+                        duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                        duckdb::types::ValueRef::Float(f) => f.to_string(),
+                        duckdb::types::ValueRef::Double(f) => f.to_string(),
+                        duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                        duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                        duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                        duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
+                        duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
+                        duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                        _ => "<unknown>".to_string(),
+                    };
+                    string_row.push(value);
+                }
+                Ok(string_row)
+            })?;
+            
+            for row_result in rows {
+                let row = row_result?;
+                row_callback(row)?;
+                processed_rows += 1;
+                
+                // Report progress
+                if let Some(callback) = progress_callback {
+                    if processed_rows % 50000 == 0 || processed_rows >= total_rows {
+                        callback(processed_rows, total_rows);
+                    }
+                }
+            }
+        }
+        
+        Ok(processed_rows)
+    }
+
+    /// Extract data by columns (optimized to use single query instead of N queries)
+    pub fn extract_column_data(&mut self) -> Result<HashMap<String, Vec<String>>> {
+        let columns = self.get_column_info()?;
+        if columns.is_empty() {
+            return Ok(HashMap::new());
+        }
+        
+        // Initialize column data vectors
+        let mut column_data: HashMap<String, Vec<String>> = columns
+            .iter()
+            .map(|col| (col.name.clone(), Vec::new()))
+            .collect();
+        
+        // Single query to get all columns at once (much more efficient than N queries)
+        let mut stmt = self.connection.prepare("SELECT * FROM data_view")
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare column data query: {e}")
+            ))?;
+        
+        let rows = stmt.query_map([], |row| {
+            let mut row_values = Vec::with_capacity(columns.len());
+            for i in 0..columns.len() {
+                let value: String = match row.get_ref(i)? {
+                    duckdb::types::ValueRef::Null => String::new(),
+                    duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                    duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Int(i) => i.to_string(),
+                    duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Float(f) => f.to_string(),
+                    duckdb::types::ValueRef::Double(f) => f.to_string(),
+                    duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                    duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                    duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
+                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
+                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    _ => "<unknown>".to_string(),
+                };
+                row_values.push(value);
+            }
+            Ok(row_values)
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to extract column data: {e}")
+        ))?;
+        
+        // Process each row and distribute values to appropriate columns
+        for row_result in rows {
+            let row_values = row_result.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process column data row: {e}")
+            ))?;
+            
+            // Distribute row values to their respective columns
+            for (col_index, value) in row_values.into_iter().enumerate() {
+                if let Some(column) = columns.get(col_index) {
+                    if let Some(col_vec) = column_data.get_mut(&column.name) {
+                        col_vec.push(value);
+                    }
+                }
+            }
+        }
+        
+        Ok(column_data)
+    }
+
+    /// Get estimated row count (for progress reporting)
+    pub fn estimate_row_count(&mut self, file_path: &Path) -> Result<u64> {
+        // For now, just load and count - could be optimized for large files
+        self.load_file(file_path)?;
+        let count: u64 = self.connection
+            .prepare("SELECT COUNT(*) FROM data_view")?
+            .query_row([], |row| row.get(0))?;
+        Ok(count)
+    }
+
+
+
+    /// Compute row hashes directly in DuckDB for maximum performance (robust version)
+    pub fn compute_row_hashes_sql(&mut self) -> Result<Vec<crate::hash::RowHash>> {
+        self.compute_row_hashes_with_progress(None)
+    }
+
+    /// Compute row hashes with deterministic ordering and full hash precision
+    pub fn compute_row_hashes_with_progress(
+        &mut self,
+        progress_callback: Option<&dyn Fn(u64, u64)>,
+    ) -> Result<Vec<crate::hash::RowHash>> {
+        // Check if this is a streaming SQL query
+        if let Some(ref query) = self.streaming_query.clone() {
+            return self.compute_streaming_row_hashes_with_progress(query, progress_callback);
+        }
+
+        // Regular file-based row hashing
+        self.compute_regular_row_hashes_with_progress(progress_callback)
+    }
+
+    /// Compute row hashes for regular files with chunking
+    fn compute_regular_row_hashes_with_progress(
+        &mut self,
+        progress_callback: Option<&dyn Fn(u64, u64)>,
+    ) -> Result<Vec<crate::hash::RowHash>> {
+        let columns = self.get_column_info()?;
+        
+        if columns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Get total row count for progress reporting
+        let total_rows: u64 = self.connection
+            .prepare("SELECT COUNT(*) FROM data_view")?
+            .query_row([], |row| row.get(0))?;
+
+        if total_rows == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut all_hashes = Vec::new();
+        let mut processed_rows = 0u64;
+        let start_time = std::time::Instant::now();
+        
+        // Use natural file order - no ORDER BY clause needed
+        // DuckDB preserves the original row order from CSV files
+        let column_list = columns.iter()
+            .map(|c| self.quote_identifier(&c.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        
+        let natural_order_sql = format!(
+            "SELECT {column_list} FROM data_view"
+        );
+        
+        let mut stmt = self.connection.prepare(&natural_order_sql)
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare natural order query: {e}")
+            ))?;
+
+        let rows = stmt.query_map([], |row| {
+            self.extract_row_values_for_hashing(row, &columns)
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to create row iterator: {e}")
+        ))?;
+
+        // Process each row individually with immediate progress updates
+        for (row_index, row_result) in rows.enumerate() {
+            let row_values = row_result.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process row {row_index}: {e}")
+            ))?;
+            
+            let hash_hex = self.compute_row_hash(&row_values);
+            
+            all_hashes.push(crate::hash::RowHash {
+                row_index: row_index as u64,
+                hash: hash_hex,
+            });
+            
+            processed_rows += 1;
+            
+            self.report_hash_progress(processed_rows, total_rows, start_time, &progress_callback);
+        }
+        
+        // Final newline after progress
+        eprintln!();
+        
+        Ok(all_hashes)
+    }
+
+    /// Compute row hashes for streaming SQL queries with chunking for memory efficiency
+    fn compute_streaming_row_hashes_with_progress(
+        &mut self,
+        query: &str,
+        progress_callback: Option<&dyn Fn(u64, u64)>,
+    ) -> Result<Vec<crate::hash::RowHash>> {
+        let columns = self.get_column_info()?;
+        
+        if columns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Get total row count without materializing data
+        let count_query = format!("SELECT COUNT(*) FROM ({query})");
+        let total_rows: u64 = self.connection
+            .prepare(&count_query)?
+            .query_row([], |row| row.get(0))?;
+
+        if total_rows == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut all_hashes = Vec::with_capacity(total_rows as usize); // Pre-allocate to prevent reallocations
+        let mut processed_rows = 0u64;
+        let start_time = std::time::Instant::now();
+
+        // Execute the full query once and stream through results (no chunking needed)
+
+        let column_list = columns.iter()
+            .map(|c| self.quote_identifier(&c.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        // Execute the full query once and stream through results (no LIMIT/OFFSET)
+        let streaming_sql = format!("SELECT {column_list} FROM ({query})");
+        let mut stmt = self.connection.prepare(&streaming_sql)
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare streaming hash query: {e}")
+            ))?;
+
+        let rows = stmt.query_map([], |row| {
+            self.extract_row_values_for_hashing(row, &columns)
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to create streaming row iterator: {e}")
+        ))?;
+
+        // Process each row from the single streaming query
+        for row_result in rows {
+            let row_values = row_result.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process streaming row {processed_rows}: {e}")
+            ))?;
+            
+            let hash_hex = self.compute_row_hash(&row_values);
+            
+            all_hashes.push(crate::hash::RowHash {
+                row_index: processed_rows,
+                hash: hash_hex,
+            });
+
+            processed_rows += 1;
+            
+            // Report progress at regular intervals for better performance
+            if processed_rows % 10000 == 0 || processed_rows >= total_rows {
+                self.report_hash_progress(processed_rows, total_rows, start_time, &progress_callback);
+            }
+        }
+        
+        // Final newline after progress
+        eprintln!();
+        
+        Ok(all_hashes)
+    }
+
+    /// Extract row values for hashing with consistent formatting
+    fn extract_row_values_for_hashing(&self, row: &duckdb::Row, columns: &[ColumnInfo]) -> duckdb::Result<Vec<String>> {
+        let mut row_values = Vec::new();
+        for i in 0..columns.len() {
+            let value: String = match row.get_ref(i) {
+                Ok(duckdb::types::ValueRef::Null) => String::new(),
+                Ok(duckdb::types::ValueRef::Boolean(b)) => b.to_string(),
+                Ok(duckdb::types::ValueRef::TinyInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::SmallInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::Int(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::BigInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::HugeInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::UTinyInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::USmallInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::UInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::UBigInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::Float(f)) => {
+                    // Use consistent float formatting to avoid precision issues
+                    format!("{f:.10}")
+                },
+                Ok(duckdb::types::ValueRef::Double(f)) => {
+                    // Use consistent double formatting to avoid precision issues
+                    format!("{f:.15}")
+                },
+                Ok(duckdb::types::ValueRef::Decimal(d)) => d.to_string(),
+                Ok(duckdb::types::ValueRef::Text(s)) => String::from_utf8_lossy(s).to_string(),
+                Ok(duckdb::types::ValueRef::Blob(b)) => format!("<blob:{} bytes>", b.len()),
+                Ok(duckdb::types::ValueRef::Date32(d)) => format!("{d:?}"),
+                Ok(duckdb::types::ValueRef::Time64(t, _)) => format!("{t:?}"),
+                Ok(duckdb::types::ValueRef::Timestamp(ts, _)) => format!("{ts:?}"),
+                _ => String::new(), // Handle any other types or errors
+            };
+            row_values.push(value);
+        }
+        Ok(row_values)
+    }
+
+    /// Compute hash for a row's values
+    fn compute_row_hash(&self, row_values: &[String]) -> String {
+        // Hash the row values using Blake3 with consistent separator
+        let row_content = row_values.join("||"); // Use || to avoid conflicts with | in data
+        let hash = blake3::hash(row_content.as_bytes());
+        
+        // Use full Blake3 hash for maximum collision resistance
+        hash.to_hex().to_string()
+    }
+
+    /// Report progress for hash computation
+    fn report_hash_progress(
+        &self,
+        processed_rows: u64,
+        total_rows: u64,
+        start_time: std::time::Instant,
+        progress_callback: &Option<&dyn Fn(u64, u64)>,
+    ) {
+        // Real-time progress updates - every 10000 rows for large files, every 1000 for smaller
+        let update_frequency = if total_rows > 1_000_000 { 10000 } else { 1000 };
+        
+        if processed_rows % update_frequency == 0 || processed_rows == total_rows {
+            // Always print to stderr for immediate feedback
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let rate = processed_rows as f64 / elapsed;
+            let percent = (processed_rows as f64 / total_rows as f64) * 100.0;
+            
+            use std::io::Write;
+            eprint!("\rProcessed: {processed_rows}/{total_rows} rows ({percent:.1}%) - {rate:.0} rows/sec");
+            let _ = std::io::stderr().flush();
+            
+            // Also call the progress callback if provided
+            if let Some(callback) = progress_callback {
+                callback(processed_rows, total_rows);
+            }
+        }
+    }
+
+    /// Compute column hashes efficiently - just hash column metadata, not all data
+    pub fn compute_column_hashes_sql(&mut self) -> Result<Vec<crate::hash::ColumnHash>> {
+        let columns = self.get_column_info()?;
+        
+        if columns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast column hashing - just hash the column metadata, not all the data
+        // This is much more efficient and still provides change detection for schema changes
+        DataProcessor::compute_column_metadata_hashes(&columns)
+    }
+
+    /// Efficient column hash computation - hash only metadata, not data content
+    pub fn compute_column_metadata_hashes(columns: &[ColumnInfo]) -> Result<Vec<crate::hash::ColumnHash>> {
+        let mut column_hashes = Vec::new();
+
+        for column in columns {
+            // Hash just the column metadata (name + type + nullable flag)
+            // This is much faster than hashing all column data
+            let metadata_string = format!("{}|{}|{}", 
+                column.name, 
+                column.data_type, 
+                if column.nullable { "nullable" } else { "not_null" }
+            );
+            
+            // Use a simple hash of the metadata
+            let hash_hex = format!("{:016x}", 
+                blake3::hash(metadata_string.as_bytes()).as_bytes()[0..8]
+                    .iter()
+                    .fold(0u64, |acc, &b| (acc << 8) | b as u64)
+            );
+
+            column_hashes.push(crate::hash::ColumnHash {
+                column_name: column.name.clone(),
+                column_type: column.data_type.clone(),
+                hash: hash_hex,
+            });
+        }
+
+        // Preserve original column order - don't sort alphabetically
+        Ok(column_hashes)
+    }
+
+
+
+    /// Load data from cloud storage using DuckDB S3 extension
+    pub async fn load_cloud_storage_data(
+        &mut self,
+        data_path: &str,
+        _workspace: &crate::workspace::SnapbaseWorkspace,
+    ) -> Result<Vec<Vec<String>>> {
+        // Use DuckDB to read parquet file from S3 directly
+        let query = format!("SELECT * FROM read_parquet('{data_path}')");
+        
+        let mut stmt = self.connection.prepare(&query)
+            .map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to prepare cloud storage query: {e}")
+            ))?;
+
+        let rows = stmt.query_map([], |row| {
+            let column_count = row.as_ref().column_count();
+            let mut string_row = Vec::with_capacity(column_count);
+            
+            for i in 0..column_count {
+                let value: String = match row.get_ref(i)? {
+                    duckdb::types::ValueRef::Null => String::new(),
+                    duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                    duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Int(i) => i.to_string(),
+                    duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Float(f) => f.to_string(),
+                    duckdb::types::ValueRef::Double(f) => f.to_string(),
+                    duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                    duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                    duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
+                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
+                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    _ => "<unknown>".to_string(),
+                };
+                string_row.push(value);
+            }
+            Ok(string_row)
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to extract cloud storage data: {e}")
+        ))?;
+        
+        let mut all_rows = Vec::new();
+        for row in rows {
+            all_rows.push(row.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process cloud storage row: {e}")
+            ))?);
+        }
+
+        Ok(all_rows)
+    }
+
+    /// Check if file format is supported
+    pub fn is_supported_format(file_path: &Path) -> bool {
+        if let Some(extension) = file_path.extension().and_then(|s| s.to_str()) {
+            matches!(extension.to_lowercase().as_str(), 
+                     "csv" | "parquet" | "json" | "jsonl" | "tsv" | "sql")
+        } else {
+            false
+        }
+    }
+}
+
+/// Information about loaded data
+#[derive(Debug, Clone)]
+pub struct DataInfo {
+    pub source: std::path::PathBuf,
+    pub row_count: u64,
+    pub columns: Vec<ColumnInfo>,
+}
+
+/// Baseline data for change detection
+#[derive(Debug, Clone)]
+pub struct BaselineData {
+    pub schema: Vec<ColumnInfo>,
+    pub data: Vec<Vec<String>>,
+}
+
+impl DataInfo {
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn column_names(&self) -> Vec<&str> {
+        self.columns.iter().map(|c| c.name.as_str()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_data_processor_creation() {
+        let _processor = DataProcessor::new().unwrap();
+        // Just test that we can create a processor
+        assert!(true);
+    }
+
+    #[test]
+    fn test_supported_formats() {
+        assert!(DataProcessor::is_supported_format(Path::new("test.csv")));
+        assert!(DataProcessor::is_supported_format(Path::new("test.parquet")));
+        assert!(DataProcessor::is_supported_format(Path::new("test.json")));
+        assert!(DataProcessor::is_supported_format(Path::new("test.sql")));
+        assert!(!DataProcessor::is_supported_format(Path::new("test.txt")));
+        assert!(!DataProcessor::is_supported_format(Path::new("test")));
+    }
+
+    #[test]
+    fn test_csv_loading() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+        
+        // Create a simple CSV file
+        let csv_content = "name,age,city\nAlice,30,NYC\nBob,25,LA\n";
+        fs::write(&csv_path, csv_content).unwrap();
+        
+        let mut processor = DataProcessor::new().unwrap();
+        let data_info = processor.load_file(&csv_path).unwrap();
+        
+        assert_eq!(data_info.row_count, 2);
+        assert_eq!(data_info.column_count(), 3);
+        assert_eq!(data_info.column_names(), vec!["name", "age", "city"]);
+    }
+
+    #[test]
+    fn test_database_type_detection() {
+        // Test MySQL detection
+        let mysql_conn = "ATTACH 'host=localhost user=test database=test' AS test (TYPE mysql)";
+        let db_type = DataProcessor::detect_database_type(mysql_conn);
+        assert!(matches!(db_type, Some(DatabaseType::MySQL)));
+        
+        // Test PostgreSQL detection
+        let pg_conn = "ATTACH 'host=localhost user=test database=test' AS test (TYPE postgres)";
+        let db_type = DataProcessor::detect_database_type(pg_conn);
+        assert!(matches!(db_type, Some(DatabaseType::PostgreSQL)));
+        
+        // Test SQLite detection
+        let sqlite_conn = "ATTACH 'database.db' AS test (TYPE sqlite)";
+        let db_type = DataProcessor::detect_database_type(sqlite_conn);
+        assert!(matches!(db_type, Some(DatabaseType::SQLite)));
+        
+        // Test default (DuckDB) detection
+        let unknown_conn = "ATTACH 'unknown://connection'";
+        let db_type = DataProcessor::detect_database_type(unknown_conn);
+        assert!(matches!(db_type, Some(DatabaseType::DuckDB)));
+    }
+
+    #[test]
+    fn test_identifier_quoting() {
+        // Test MySQL quoting
+        let mut processor = DataProcessor::new().unwrap();
+        processor.database_type = Some(DatabaseType::MySQL);
+        assert_eq!(processor.quote_identifier("comments"), "`comments`");
+        
+        // Test PostgreSQL quoting
+        processor.database_type = Some(DatabaseType::PostgreSQL);
+        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
+        
+        // Test SQLite quoting
+        processor.database_type = Some(DatabaseType::SQLite);
+        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
+        
+        // Test DuckDB quoting (default)
+        processor.database_type = Some(DatabaseType::DuckDB);
+        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
+        
+        // Test None (default to DuckDB)
+        processor.database_type = None;
+        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
+    }
+}

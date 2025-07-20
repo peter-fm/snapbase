@@ -1,0 +1,53 @@
+[project]
+name = "snapbase"
+version = "0.1.0"
+description = "A snapshot-based structured data diff tool"
+readme = "README.md"
+authors = [
+    { name = "Peter Fraser-Mackenzie", email = "pete.fm@pm.me" }
+]
+requires-python = ">=3.9"
+dependencies = [
+    "pandas>=2.3.1",
+    "polars[pyarrow]>=1.31.0",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Repository = "https://github.com/peter-fm/snapbase"
+
+[tool.maturin]
+module-name = "snapbase._core"
+python-packages = ["snapbase"]
+python-source = "src"
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "maturin>=1.0,<2.0",
+]
+
+[project.scripts]
+test = "snapbase:test_runner"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.4.1",
+    "maturin>=1.0,<2.0",
+]

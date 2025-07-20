@@ -1,0 +1,9 @@
+# Rust build artifacts
+/target
+/logs
+# Test outputs
+/tests/fixtures/workspaces/*
+
+# Temporary files
+*.tmp
+*.temp

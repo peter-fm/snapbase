@@ -1,0 +1,31 @@
+# Rust build artifacts
+/target
+/core/target
+/cli/target
+/python/target
+
+# Snapbase workspace
+/.snapbase
+
+# OS files
+.DS_Store
+
+# Legacy directories from refactoring
+/demo
+/test_data
+/src.backup
+/test_data.backup
+/tests.backup
+
+# Ignore compressed snapshot archives
+.snapbase/*
+
+# Logs
+logs/*
+.claude/*
+
+# Environment files with credentials
+.env
+
+
+snapbase.toml

@@ -1,0 +1,9 @@
+# Rust build artifacts
+/target
+/logs
+# Temporary files
+*.tmp
+*.temp
+
+# Ignore compressed snapshot archives
+.snapbase/*.snapbase

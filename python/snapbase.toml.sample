@@ -1,0 +1,101 @@
+# snapbase.toml.sample
+# Sample configuration file for snapbase
+# Copy this to snapbase.toml and customize for your project
+
+# Storage configuration - choose one backend
+[storage]
+backend = "local"  # Options: "local" or "s3"
+
+# Only include the section for your chosen backend
+
+# Option 1: Local storage
+[storage.local]
+path = ".snapbase"  # Directory to store snapshots
+
+# Option 2: S3 storage (uncomment and configure if using S3)
+# [storage.s3]
+# bucket = "my-snapbase-bucket"
+# prefix = "project-name/"  # Optional prefix for organization
+# region = "us-west-2"
+# 
+# # AWS credentials are read from environment variables:
+# # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+
+# Snapshot naming configuration
+[snapshot]
+default_name_pattern = "{source}_{format}_{seq}"
+
+# Alternative naming patterns:
+# default_name_pattern = "{source}_{date}_{seq}"        # sales_20250716_1
+# default_name_pattern = "{source}_{timestamp}"         # sales_20250716_143052
+# default_name_pattern = "backup_{source}_{hash}"       # backup_sales_a7b3c9d
+# default_name_pattern = "{user}_{source}_{date}"       # pete_sales_20250716
+
+# Available variables:
+# {source}    - filename without extension (e.g., "sales" from "sales.csv")
+# {format}    - file format (csv, json, parquet, sql)
+# {seq}       - auto-incrementing sequence number (1, 2, 3, ...)
+# {timestamp} - current timestamp (YYYYMMDD_HHMMSS format)
+# {date}      - current date (YYYYMMDD format)
+# {time}      - current time (HHMMSS format)
+# {hash}      - 7-character random hash
+# {user}      - system username
+
+# Database configurations for --database flag
+# Use: snapbase snapshot --database my-database
+[databases.my-database]
+type = "mysql"
+host = "localhost"
+port = 3306
+database = "myapp"
+username = "dbuser"
+password_env = "DB_PASSWORD"  # Environment variable containing password
+tables = ["users", "orders", "products"]  # Specific tables to include
+exclude_tables = ["temp_*", "cache_*"]     # Tables to exclude (supports wildcards)
+
+[databases.prod-db]
+type = "postgresql"
+# Use connection string format (alternative to individual fields)
+connection_string = "postgresql://user@prod.example.com:5432/proddb"
+password_env = "PROD_DB_PASSWORD"
+tables = ["*"]  # All tables
+exclude_tables = ["logs_*"]
+
+[databases.analytics]
+type = "mysql"
+host = "analytics.example.com"
+port = 3306
+database = "analytics"
+username = "analytics_user"
+password_env = "ANALYTICS_DB_PASSWORD"
+# No tables specified = all tables included
+
+[databases.local-sqlite]
+type = "sqlite"
+database = "./data/local.db"  # For SQLite, database is the file path
+tables = ["*"]
+
+# Database connections for SQL files (legacy approach)
+# Note: Snapbase uses environment variable substitution in SQL files
+# Set these as environment variables, NOT in this config file for security
+# 
+# Example SQL file usage:
+#   -- ATTACH 'host={DB_HOST} user={DB_USER} password={DB_PASSWORD} database={DB_NAME}' AS mydb (TYPE postgres);
+#   USE mydb;
+#   SELECT * FROM users;
+#
+# Set these environment variables:
+# export DB_HOST=localhost
+# export DB_USER=myuser  
+# export DB_PASSWORD=mypassword
+# export DB_NAME=mydb
+#
+# Or for different databases:
+# export POSTGRES_URL="postgresql://user:pass@localhost:5432/dbname"
+# export MYSQL_URL="mysql://user:pass@localhost:3306/dbname"
+# export SQLITE_PATH="./data.db"
+
+# Performance settings
+[performance]
+# DuckDB handles performance optimizations internally for large files
+

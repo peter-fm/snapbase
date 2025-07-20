@@ -1,0 +1,50 @@
+[package]
+name = "snapbase-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for snapbase"
+
+[[bin]]
+name = "snapbase"
+path = "src/main.rs"
+
+[dependencies]
+# Core snapbase functionality
+snapbase-core = { path = "../core" }
+
+# CLI and argument parsing
+clap = { workspace = true }
+
+# Logging
+log = { workspace = true }
+env_logger = { workspace = true }
+
+# Progress reporting
+indicatif = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Serialization (for output formatting)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# File system utilities
+walkdir = { workspace = true }
+dirs = { workspace = true }
+
+# Environment variable loading
+dotenv = { workspace = true }
+
+# Additional dependencies needed by CLI
+chrono = { workspace = true }
+blake3 = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+duckdb = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+snapbase-core = { path = "../core", features = ["test-fixtures"] }

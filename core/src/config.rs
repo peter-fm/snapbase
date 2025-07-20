@@ -1,0 +1,618 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::env;
+use std::fs;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
+pub struct Config {
+    pub storage: StorageConfigToml,
+    pub snapshot: SnapshotConfig,
+    #[serde(default)]
+    pub databases: HashMap<String, DatabaseConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotConfig {
+    pub default_name_pattern: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseType {
+    Mysql,
+    Postgresql,
+    Sqlite,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    #[serde(rename = "type")]
+    pub db_type: DatabaseType,
+    
+    /// Direct connection string (alternative to individual fields)
+    pub connection_string: Option<String>,
+    
+    /// Individual connection fields
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub database: Option<String>,
+    pub username: Option<String>,
+    
+    /// Environment variable containing the password
+    pub password_env: Option<String>,
+    
+    /// Tables to include (supports patterns like "users" or "*" for all)
+    #[serde(default)]
+    pub tables: Vec<String>,
+    
+    /// Tables to exclude (supports patterns like "temp_*")
+    #[serde(default)]
+    pub exclude_tables: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageBackend {
+    Local,
+    S3,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalStorageConfig {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3StorageConfig {
+    pub bucket: String,
+    pub prefix: String,
+    pub region: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfigToml {
+    pub backend: StorageBackend,
+    #[serde(default)]
+    pub local: Option<LocalStorageConfig>,
+    #[serde(default)]
+    pub s3: Option<S3StorageConfig>,
+}
+
+// Runtime config that includes credentials for existing code
+#[derive(Debug, Clone)]
+pub enum StorageConfig {
+    Local {
+        path: PathBuf,
+    },
+    S3 {
+        bucket: String,
+        prefix: String,
+        region: String,
+        access_key_id: Option<String>,
+        secret_access_key: Option<String>,
+    },
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        StorageConfigToml::default().to_runtime()
+    }
+}
+
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            default_name_pattern: "{source}_{format}_{seq}".to_string(),
+        }
+    }
+}
+
+impl Default for StorageBackend {
+    fn default() -> Self {
+        Self::Local
+    }
+}
+
+impl Default for LocalStorageConfig {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::from(".snapbase"),
+        }
+    }
+}
+
+impl Default for S3StorageConfig {
+    fn default() -> Self {
+        Self {
+            bucket: "my-snapbase-bucket".to_string(),
+            prefix: "project-name/".to_string(),
+            region: "us-west-2".to_string(),
+        }
+    }
+}
+
+impl Default for StorageConfigToml {
+    fn default() -> Self {
+        Self {
+            backend: StorageBackend::default(),
+            local: Some(LocalStorageConfig::default()),
+            s3: None,
+        }
+    }
+}
+
+impl StorageConfigToml {
+    pub fn to_runtime(&self) -> StorageConfig {
+        match self.backend {
+            StorageBackend::Local => {
+                let default_local = LocalStorageConfig::default();
+                let local_config = self.local.as_ref().unwrap_or(&default_local);
+                StorageConfig::Local {
+                    path: local_config.path.clone(),
+                }
+            },
+            StorageBackend::S3 => {
+                let default_s3 = S3StorageConfig::default();
+                let s3_config = self.s3.as_ref().unwrap_or(&default_s3);
+                StorageConfig::S3 {
+                    bucket: s3_config.bucket.clone(),
+                    prefix: s3_config.prefix.clone(),
+                    region: s3_config.region.clone(),
+                    access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
+                    secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
+                }
+            },
+        }
+    }
+
+    pub fn from_runtime(runtime_config: &StorageConfig) -> Self {
+        match runtime_config {
+            StorageConfig::Local { path } => Self {
+                backend: StorageBackend::Local,
+                local: Some(LocalStorageConfig {
+                    path: path.clone(),
+                }),
+                s3: None,
+            },
+            StorageConfig::S3 { bucket, prefix, region, .. } => Self {
+                backend: StorageBackend::S3,
+                local: None,
+                s3: Some(S3StorageConfig {
+                    bucket: bucket.clone(),
+                    prefix: prefix.clone(),
+                    region: region.clone(),
+                }),
+            },
+        }
+    }
+}
+
+pub fn get_config() -> Result<Config> {
+    // Priority order (highest to lowest):
+    // 1. Explicit config file via SNAPBASE_CONFIG env var
+    // 2. Local config file (snapbase.toml)
+    // 3. Saved global config file (~/.snapbase/global.toml)
+    // 4. Default configuration
+    
+    let mut config = Config::default();
+    
+    // 1. Check config file via environment variable (highest priority)
+    if let Ok(config_path) = env::var("SNAPBASE_CONFIG") {
+        if let Ok(config_content) = fs::read_to_string(config_path) {
+            if let Ok(loaded_config) = toml::from_str::<Config>(&config_content) {
+                return Ok(loaded_config);
+            }
+        }
+    }
+    
+    // 2. Check saved global config file location (fallback)
+    if let Some(home_dir) = dirs::home_dir() {
+        let config_path = home_dir.join(".snapbase").join("global.toml");
+        if config_path.exists() {
+            if let Ok(config_content) = fs::read_to_string(config_path) {
+                if let Ok(loaded_config) = toml::from_str::<Config>(&config_content) {
+                    config = loaded_config;
+                }
+            }
+        }
+    }
+    
+    // 3. Load local config file (snapbase.toml) if it exists - takes precedence over global
+    if let Ok(current_dir) = env::current_dir() {
+        let local_config_path = current_dir.join("snapbase.toml");
+        if local_config_path.exists() {
+            if let Ok(local_content) = fs::read_to_string(local_config_path) {
+                if let Ok(local_config) = toml::from_str::<Config>(&local_content) {
+                    // Merge local config with global config (local takes precedence)
+                    config.storage = local_config.storage;
+                    config.snapshot = local_config.snapshot;
+                    config.databases = local_config.databases;
+                }
+            }
+        }
+    }
+    
+    // Override snapshot config with environment variables for backward compatibility
+    if let Ok(pattern) = env::var("SNAPBASE_DEFAULT_NAME_PATTERN") {
+        config.snapshot.default_name_pattern = pattern;
+    }
+    
+    Ok(config)
+}
+
+pub fn get_storage_config() -> Result<StorageConfig> {
+    Ok(get_config()?.storage.to_runtime())
+}
+
+pub fn get_storage_config_from_env_or_default() -> Result<StorageConfig> {
+    // Skip saved config file and only use environment variables or default
+    
+    // Check environment variables (for backward compatibility)
+    if let Ok(bucket) = std::env::var("SNAPBASE_S3_BUCKET") {
+        return Ok(StorageConfig::S3 {
+            bucket,
+            prefix: std::env::var("SNAPBASE_S3_PREFIX").unwrap_or_default(),
+            region: std::env::var("SNAPBASE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+            access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
+            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+        });
+    }
+    
+    // Default to local storage
+    Ok(StorageConfigToml::default().to_runtime())
+}
+
+pub fn get_storage_config_project_first() -> Result<StorageConfig> {
+    // Project-first priority: snapbase.toml → defaults
+    // This is used for regular init to prioritize local project settings
+    
+    // Load local config file (snapbase.toml) if it exists
+    if let Ok(current_dir) = std::env::current_dir() {
+        let local_config_path = current_dir.join("snapbase.toml");
+        if local_config_path.exists() {
+            if let Ok(local_content) = fs::read_to_string(local_config_path) {
+                if let Ok(local_config) = toml::from_str::<Config>(&local_content) {
+                    return Ok(local_config.storage.to_runtime());
+                }
+            }
+        }
+    }
+    
+    // Check environment variables (for backward compatibility)
+    if let Ok(bucket) = std::env::var("SNAPBASE_S3_BUCKET") {
+        return Ok(StorageConfig::S3 {
+            bucket,
+            prefix: std::env::var("SNAPBASE_S3_PREFIX").unwrap_or_default(),
+            region: std::env::var("SNAPBASE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
+            access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
+            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+        });
+    }
+    
+    // Default to local storage
+    Ok(StorageConfigToml::default().to_runtime())
+}
+
+pub fn save_config(config: &Config) -> Result<()> {
+    let config_dir = if let Some(home_dir) = dirs::home_dir() {
+        home_dir.join(".snapbase")
+    } else {
+        PathBuf::from(".snapbase")
+    };
+    
+    fs::create_dir_all(&config_dir)?;
+    
+    let config_path = config_dir.join("global.toml");
+    let config_toml = toml::to_string_pretty(config)?;
+    fs::write(config_path, config_toml)?;
+    
+    Ok(())
+}
+
+pub fn save_storage_config(config: &StorageConfig) -> Result<()> {
+    let mut full_config = get_config()?;
+    // Convert runtime config back to toml format
+    full_config.storage = StorageConfigToml::from_runtime(config);
+    save_config(&full_config)
+}
+
+pub fn get_snapshot_config() -> Result<SnapshotConfig> {
+    Ok(get_config()?.snapshot)
+}
+
+pub fn save_default_name_pattern(pattern: &str) -> Result<()> {
+    let mut config = get_config()?;
+    config.snapshot.default_name_pattern = pattern.to_string();
+    save_config(&config)
+}
+
+pub fn save_global_config_if_missing(storage_config: &StorageConfig) -> Result<()> {
+    // Check if global config file exists
+    let config_dir = if let Some(home_dir) = dirs::home_dir() {
+        home_dir.join(".snapbase")
+    } else {
+        PathBuf::from(".snapbase")
+    };
+    let config_path = config_dir.join("global.toml");
+    
+    // Only save if the file doesn't exist
+    if !config_path.exists() {
+        let config = Config {
+            storage: StorageConfigToml::from_runtime(storage_config),
+            ..Default::default()
+        };
+        save_config(&config)?;
+    }
+    
+    Ok(())
+}
+
+pub fn get_storage_config_with_workspace(workspace_path: Option<&std::path::Path>) -> Result<StorageConfig> {
+    // Priority order: workspace config → global config → env vars → defaults
+    
+    // 1. Check workspace config first (if workspace path provided)
+    if let Some(workspace_path) = workspace_path {
+        let root = workspace_path.to_path_buf();
+        
+        // Check for snapbase.toml in workspace directory
+        let workspace_toml_path = root.join("snapbase.toml");
+        if workspace_toml_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&workspace_toml_path) {
+                if let Ok(config) = toml::from_str::<Config>(&content) {
+                    return Ok(config.storage.to_runtime());
+                }
+            }
+        }
+    }
+    
+    // 2. Fall back to global config → env vars → defaults
+    get_storage_config()
+}
+
+impl DatabaseConfig {
+    /// Build a connection string from the configuration
+    pub fn build_connection_string(&self) -> Result<String> {
+        if let Some(ref conn_str) = self.connection_string {
+            // Use provided connection string, substitute password if needed
+            let mut result = conn_str.clone();
+            if let Some(ref password_env) = self.password_env {
+                if let Ok(password) = env::var(password_env) {
+                    result = result.replace("{password}", &password);
+                }
+            }
+            return Ok(result);
+        }
+        
+        // Build connection string from individual fields
+        let host = self.host.as_ref().ok_or_else(|| anyhow::anyhow!("Database host is required"))?;
+        let database = self.database.as_ref().ok_or_else(|| anyhow::anyhow!("Database name is required"))?;
+        let username = self.username.as_ref().ok_or_else(|| anyhow::anyhow!("Database username is required"))?;
+        
+        let password = if let Some(ref password_env) = self.password_env {
+            env::var(password_env).map_err(|_| anyhow::anyhow!("Password environment variable '{}' not found", password_env))?
+        } else {
+            return Err(anyhow::anyhow!("Database password or password_env is required"));
+        };
+        
+        let port = self.port.unwrap_or(match self.db_type {
+            DatabaseType::Mysql => 3306,
+            DatabaseType::Postgresql => 5432,
+            DatabaseType::Sqlite => 0, // Not used for SQLite
+        });
+        
+        let connection_string = match self.db_type {
+            DatabaseType::Mysql => {
+                format!("mysql://{username}:{password}@{host}:{port}/{database}")
+            }
+            DatabaseType::Postgresql => {
+                format!("postgresql://{username}:{password}@{host}:{port}/{database}")
+            }
+            DatabaseType::Sqlite => {
+                // For SQLite, database field is the file path
+                format!("sqlite://{database}")
+            }
+        };
+        
+        Ok(connection_string)
+    }
+    
+    /// Get the tables to include, handling patterns
+    pub fn get_included_tables(&self) -> Vec<String> {
+        if self.tables.is_empty() || self.tables.contains(&"*".to_string()) {
+            vec!["*".to_string()]
+        } else {
+            self.tables.clone()
+        }
+    }
+    
+    /// Get the tables to exclude, handling patterns
+    pub fn get_excluded_tables(&self) -> Vec<String> {
+        self.exclude_tables.clone()
+    }
+}
+
+/// Get database configuration by name
+pub fn get_database_config(name: &str) -> Result<DatabaseConfig> {
+    let config = get_config()?;
+    config.databases.get(name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Database '{}' not found in configuration", name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_database_config_connection_string() {
+        env::set_var("TEST_DB_PASSWORD", "testpass");
+        
+        // Test with individual fields
+        let config = DatabaseConfig {
+            db_type: DatabaseType::Mysql,
+            connection_string: None,
+            host: Some("localhost".to_string()),
+            port: Some(3306),
+            database: Some("testdb".to_string()),
+            username: Some("testuser".to_string()),
+            password_env: Some("TEST_DB_PASSWORD".to_string()),
+            tables: vec![],
+            exclude_tables: vec![],
+        };
+        
+        let conn_str = config.build_connection_string().unwrap();
+        assert_eq!(conn_str, "mysql://testuser:testpass@localhost:3306/testdb");
+        
+        // Test with connection string template
+        let config = DatabaseConfig {
+            db_type: DatabaseType::Postgresql,
+            connection_string: Some("postgresql://user:{password}@host:5432/db".to_string()),
+            host: None,
+            port: None,
+            database: None,
+            username: None,
+            password_env: Some("TEST_DB_PASSWORD".to_string()),
+            tables: vec![],
+            exclude_tables: vec![],
+        };
+        
+        let conn_str = config.build_connection_string().unwrap();
+        assert_eq!(conn_str, "postgresql://user:testpass@host:5432/db");
+        
+        env::remove_var("TEST_DB_PASSWORD");
+    }
+    
+    #[test]
+    fn test_database_config_table_filtering() {
+        let config = DatabaseConfig {
+            db_type: DatabaseType::Mysql,
+            connection_string: None,
+            host: None,
+            port: None,
+            database: None,
+            username: None,
+            password_env: None,
+            tables: vec!["users".to_string(), "orders".to_string()],
+            exclude_tables: vec!["temp_*".to_string()],
+        };
+        
+        let included = config.get_included_tables();
+        assert_eq!(included, vec!["users", "orders"]);
+        
+        let excluded = config.get_excluded_tables();
+        assert_eq!(excluded, vec!["temp_*"]);
+        
+        // Test wildcard
+        let config = DatabaseConfig {
+            db_type: DatabaseType::Mysql,
+            connection_string: None,
+            host: None,
+            port: None,
+            database: None,
+            username: None,
+            password_env: None,
+            tables: vec!["*".to_string()],
+            exclude_tables: vec![],
+        };
+        
+        let included = config.get_included_tables();
+        assert_eq!(included, vec!["*"]);
+    }
+    
+    #[test]
+    fn test_config_with_databases() {
+        let mut config = Config::default();
+        
+        let db_config = DatabaseConfig {
+            db_type: DatabaseType::Mysql,
+            connection_string: None,
+            host: Some("localhost".to_string()),
+            port: Some(3306),
+            database: Some("testdb".to_string()),
+            username: Some("testuser".to_string()),
+            password_env: Some("TEST_PASSWORD".to_string()),
+            tables: vec!["users".to_string()],
+            exclude_tables: vec![],
+        };
+        
+        config.databases.insert("test-db".to_string(), db_config);
+        
+        assert!(config.databases.contains_key("test-db"));
+        assert_eq!(config.databases["test-db"].host, Some("localhost".to_string()));
+        assert_eq!(config.databases["test-db"].tables, vec!["users"]);
+    }
+    
+    #[test]
+    fn test_config_s3_only_no_local_section() {
+        // Test that S3 config works without requiring local section
+        let toml_content = r#"
+[storage]
+backend = "s3"
+
+[storage.s3]
+bucket = "my-bucket"
+prefix = "my-prefix"
+region = "us-west-2"
+
+[snapshot]
+default_name_pattern = "{source}_{seq}"
+"#;
+        
+        let config: Config = toml::from_str(toml_content).unwrap();
+        assert_eq!(config.storage.backend, StorageBackend::S3);
+        assert!(config.storage.local.is_none());
+        assert!(config.storage.s3.is_some());
+        
+        let s3_config = config.storage.s3.as_ref().unwrap();
+        assert_eq!(s3_config.bucket, "my-bucket");
+        assert_eq!(s3_config.prefix, "my-prefix");
+        assert_eq!(s3_config.region, "us-west-2");
+        
+        // Test that to_runtime() works correctly
+        let runtime_config = config.storage.to_runtime();
+        match runtime_config {
+            StorageConfig::S3 { bucket, prefix, region, .. } => {
+                assert_eq!(bucket, "my-bucket");
+                assert_eq!(prefix, "my-prefix");
+                assert_eq!(region, "us-west-2");
+            }
+            _ => panic!("Expected S3 config"),
+        }
+    }
+    
+    #[test]
+    fn test_config_local_only_no_s3_section() {
+        // Test that local config works without requiring S3 section
+        let toml_content = r#"
+[storage]
+backend = "local"
+
+[storage.local]
+path = "/tmp/snapbase"
+
+[snapshot]
+default_name_pattern = "{source}_{seq}"
+"#;
+        
+        let config: Config = toml::from_str(toml_content).unwrap();
+        assert_eq!(config.storage.backend, StorageBackend::Local);
+        assert!(config.storage.local.is_some());
+        assert!(config.storage.s3.is_none());
+        
+        let local_config = config.storage.local.as_ref().unwrap();
+        assert_eq!(local_config.path, PathBuf::from("/tmp/snapbase"));
+        
+        // Test that to_runtime() works correctly
+        let runtime_config = config.storage.to_runtime();
+        match runtime_config {
+            StorageConfig::Local { path } => {
+                assert_eq!(path, PathBuf::from("/tmp/snapbase"));
+            }
+            _ => panic!("Expected Local config"),
+        }
+    }
+}

@@ -1,0 +1,39 @@
+[package]
+name = "snapbase"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for snapbase"
+
+[workspace]
+# This is an independent workspace separate from the main snapbase workspace
+
+[lib]
+name = "_core"
+# "cdylib" is necessary to produce a shared library for Python to import from.
+crate-type = ["cdylib"]
+
+[dependencies]
+# Core snapbase functionality
+snapbase-core = { path = "../core" }
+
+# "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
+# No abi3 restriction since we require Python 3.12+
+pyo3 = { version = "0.25", features = ["extension-module"] }
+
+# Arrow ecosystem for zero-copy data transfer to Python (must match DuckDB's version)
+arrow = "55.2"
+pyo3-arrow = "0.10"
+
+# Error handling
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime and time
+tokio = { version = "1.0", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Cryptography
+blake3 = "1.5"
