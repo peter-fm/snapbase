@@ -1903,7 +1903,9 @@ impl DataProcessor {
         
         let create_temp_query = format!(
             "CREATE TABLE {} AS 
-             SELECT ROW_NUMBER() OVER () - 1 as row_num, * FROM read_parquet('{}')",
+             SELECT ROW_NUMBER() OVER () - 1 as row_num, * 
+             FROM read_parquet('{}') 
+             WHERE __snapbase_removed = false",
             temp_table, duckdb_path
         );
         

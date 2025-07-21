@@ -74,10 +74,10 @@ pub fn execute_command(command: Commands, workspace_path: Option<&Path>) -> Resu
             compare_to,
             quiet,
             json,
-        } => streaming_status_command(workspace_path, &input, compare_to.as_deref(), quiet, json),
+        } => thin_wrapper_status_command(workspace_path, &input, compare_to.as_deref(), quiet, json),
         Commands::List { source, json } => list_command(workspace_path, source.as_deref(), json),
         Commands::Stats { json } => stats_command(workspace_path, json),
-        Commands::Diff { source, from, to, json } => streaming_diff_command(workspace_path, &source, &from, &to, json),
+        Commands::Diff { source, from, to, json } => thin_wrapper_diff_command(workspace_path, &source, &from, &to, json),
         Commands::Export {
             input,
             file,
@@ -2304,4 +2304,145 @@ mod tests {
         let result = validate_file_within_workspace(&invalid_file, &ws);
         assert!(result.is_err(), "Should reject file outside workspace");
     }
+}
+
+/// Thin wrapper status command using the new core API
+fn thin_wrapper_status_command(
+    workspace_path: Option<&Path>,
+    input: &str,
+    compare_to: Option<&str>,
+    quiet: bool,
+    json: bool,
+) -> Result<()> {
+    use snapbase_core::change_detection::{DataSource, ComparisonOptions};
+    
+    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
+    let resolver = SnapshotResolver::new(workspace.clone());
+
+    // Canonicalize input path for comparison
+    let input_path = if Path::new(input).is_absolute() {
+        Path::new(input).to_path_buf()
+    } else {
+        workspace.root.join(input)
+    };
+    let canonical_input_path = input_path.canonicalize()
+        .unwrap_or(input_path.clone());
+
+    // Resolve comparison snapshot
+    let comparison_snapshot = if let Some(name) = compare_to {
+        let snap_ref = SnapshotRef::from_string(name.to_string());
+        resolver.resolve(&snap_ref)?
+    } else {
+        // Find latest snapshot for this specific source
+        let canonical_str = canonical_input_path.to_string_lossy().to_string();
+        let latest_for_source = workspace.latest_snapshot_for_source(&canonical_str)?;
+        if let Some(latest_name) = latest_for_source {
+            let snap_ref = SnapshotRef::from_string(latest_name);
+            resolver.resolve(&snap_ref)?
+        } else {
+            return Err(SnapbaseError::workspace("No snapshots found to compare against"));
+        }
+    };
+
+    if !json {
+        println!("📊 Streaming comparison of '{}' against snapshot '{}'...", input, comparison_snapshot.name);
+    }
+
+    // Get the actual data path from the snapshot
+    let baseline_data_path = comparison_snapshot.data_path.as_ref()
+        .ok_or_else(|| SnapbaseError::archive("Baseline snapshot has no data path"))?;
+
+    // Create data sources
+    let current_source = DataSource::File(canonical_input_path);
+    let baseline_source = DataSource::StoredSnapshot {
+        path: baseline_data_path.clone(),
+        workspace: workspace.clone(),
+    };
+
+    // Set up comparison options - use defaults which exclude metadata columns
+    let options = ComparisonOptions::default();
+
+    // Run comparison using the new core API
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(async {
+        StreamingChangeDetector::compare_data_sources(
+            baseline_source, 
+            current_source, 
+            options, 
+            None
+        ).await
+    })?;
+
+    // Output results
+    if json {
+        println!("{}", JsonFormatter::format_comprehensive_status_results(&result)?);
+    } else {
+        PrettyPrinter::print_comprehensive_status_results(&result, quiet);
+    }
+
+    Ok(())
+}
+
+/// Thin wrapper diff command using the new core API
+fn thin_wrapper_diff_command(
+    workspace_path: Option<&Path>,
+    source: &str,
+    from: &str,
+    to: &str,
+    json: bool,
+) -> Result<()> {
+    use snapbase_core::change_detection::{DataSource, ComparisonOptions};
+    
+    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
+    let resolver = SnapshotResolver::new(workspace.clone());
+
+    // Resolve from and to snapshots
+    let from_ref = SnapshotRef::from_string(from.to_string());
+    let from_snapshot = resolver.resolve(&from_ref)?;
+    
+    let to_ref = SnapshotRef::from_string(to.to_string());
+    let to_snapshot = resolver.resolve(&to_ref)?;
+
+    if !json {
+        println!("🔍 Streaming comparison of snapshots '{}' → '{}'", from, to);
+    }
+
+    // Get the actual data paths from the snapshots
+    let from_data_path = from_snapshot.data_path.as_ref()
+        .ok_or_else(|| SnapbaseError::archive("From snapshot has no data path"))?;
+    let to_data_path = to_snapshot.data_path.as_ref()
+        .ok_or_else(|| SnapbaseError::archive("To snapshot has no data path"))?;
+
+    // Create data sources
+    let baseline_source = DataSource::StoredSnapshot {
+        path: from_data_path.clone(),
+        workspace: workspace.clone(),
+    };
+    let current_source = DataSource::StoredSnapshot {
+        path: to_data_path.clone(),
+        workspace: workspace.clone(),
+    };
+
+    // Set up comparison options - use defaults which exclude metadata columns
+    let options = ComparisonOptions::default();
+
+    // Run comparison using the new core API
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(async {
+        StreamingChangeDetector::compare_data_sources(
+            baseline_source, 
+            current_source, 
+            options, 
+            None
+        ).await
+    })?;
+
+    // Output results
+    if json {
+        println!("{}", JsonFormatter::format_comprehensive_status_results(&result)?);
+    } else {
+        PrettyPrinter::print_comprehensive_diff_results(&result, from, to);
+    }
+
+    Ok(())
 }

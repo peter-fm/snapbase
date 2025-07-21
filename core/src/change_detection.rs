@@ -2,8 +2,11 @@
 
 use crate::error::Result;
 use crate::hash::ColumnInfo;
+use crate::workspace::SnapbaseWorkspace;
+use crate::data::DataProcessor;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 // Type alias for complex return types
 type ChangeResult = (Vec<(u64, u64)>, Vec<u64>, Vec<u64>);
@@ -31,6 +34,65 @@ pub struct ChangedRowsResult {
     pub baseline_changed: Vec<u64>,   // row indices in baseline that are modified/removed
     pub current_changed: Vec<u64>,    // row indices in current that are modified/added  
     pub unchanged_count: usize,       // number of rows that didn't change
+}
+
+/// Data source for streaming comparison
+#[derive(Debug, Clone)]
+pub enum DataSource {
+    /// Compare against a file (CSV, JSON, Parquet)
+    File(PathBuf),
+    /// Compare against a stored snapshot  
+    StoredSnapshot {
+        path: String,
+        workspace: SnapbaseWorkspace,
+    },
+    /// Compare against a database query result
+    DatabaseQuery {
+        connection_string: String,
+        query: String,
+    },
+}
+
+/// Configuration options for streaming comparison
+#[derive(Debug, Clone)]
+pub struct ComparisonOptions {
+    /// Exclude snapbase metadata columns from comparison
+    pub exclude_metadata_columns: bool,
+    /// Enable progress reporting during comparison
+    pub progress_reporting: bool,
+    /// Memory limit for streaming operations (None = unlimited)
+    pub memory_limit: Option<usize>,
+    /// Sample size for progress reporting
+    pub progress_sample_size: u64,
+}
+
+impl Default for ComparisonOptions {
+    fn default() -> Self {
+        Self {
+            exclude_metadata_columns: true,
+            progress_reporting: true,
+            memory_limit: None,
+            progress_sample_size: 10000,
+        }
+    }
+}
+
+/// Progress information during streaming comparison
+#[derive(Debug, Clone)]
+pub struct StreamingProgress {
+    pub phase: StreamingPhase,
+    pub processed_rows: u64,
+    pub total_rows: u64,
+    pub message: String,
+}
+
+/// Phases of streaming comparison
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamingPhase {
+    BuildingHashSets,
+    IdentifyingChanges,
+    AnalyzingDetails,
+    Complete,
 }
 
 impl Default for RowHashSet {
@@ -564,6 +626,237 @@ impl StreamingChangeDetector {
         }
         
         hash.to_hex().to_string()
+    }
+
+    /// High-level streaming comparison API - combines all three phases
+    /// This is the main entry point for CLI, Python, and Java wrappers
+    pub async fn compare_data_sources(
+        baseline_source: DataSource,
+        current_source: DataSource,
+        options: ComparisonOptions,
+        progress_callback: Option<Box<dyn Fn(StreamingProgress) + Send>>,
+    ) -> Result<ChangeDetectionResult> {
+        // Phase 1: Build hash sets from both data sources
+        let (baseline_hashes, current_hashes) = Self::build_hash_sets_from_sources(
+            &baseline_source,
+            &current_source,
+            &options,
+            progress_callback.as_ref(),
+        ).await?;
+
+        // Phase 2: Identify changed rows using hash comparison
+        if let Some(ref callback) = progress_callback {
+            callback(StreamingProgress {
+                phase: StreamingPhase::IdentifyingChanges,
+                processed_rows: 0,
+                total_rows: 0,
+                message: "Identifying changed rows...".to_string(),
+            });
+        }
+        
+        let changed_rows = Self::identify_changed_rows(&baseline_hashes, &current_hashes);
+        
+        // Phase 3: Detailed analysis of changed rows only
+        if changed_rows.baseline_changed.is_empty() && changed_rows.current_changed.is_empty() {
+            // No changes detected - return empty result
+            return Ok(ChangeDetectionResult {
+                schema_changes: SchemaChanges {
+                    column_order: None,
+                    columns_added: Vec::new(),
+                    columns_removed: Vec::new(),
+                    columns_renamed: Vec::new(),
+                    type_changes: Vec::new(),
+                },
+                row_changes: RowChanges {
+                    modified: Vec::new(),
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                },
+            });
+        }
+
+        if let Some(ref callback) = progress_callback {
+            callback(StreamingProgress {
+                phase: StreamingPhase::AnalyzingDetails,
+                processed_rows: 0,
+                total_rows: changed_rows.baseline_changed.len() as u64 + changed_rows.current_changed.len() as u64,
+                message: format!("Analyzing {} changed rows in detail...", changed_rows.baseline_changed.len() + changed_rows.current_changed.len()),
+            });
+        }
+
+        Self::analyze_changed_data_sources(&changed_rows, &baseline_source, &current_source, &options).await
+    }
+
+    /// Phase 1: Build hash sets from data sources with built-in filtering
+    async fn build_hash_sets_from_sources(
+        baseline_source: &DataSource,
+        current_source: &DataSource,
+        options: &ComparisonOptions,
+        progress_callback: Option<&Box<dyn Fn(StreamingProgress) + Send>>,
+    ) -> Result<(RowHashSet, RowHashSet)> {
+        // Load baseline data
+        let (baseline_data, baseline_schema) = Self::load_data_from_source(baseline_source).await?;
+        
+        // Load current data
+        let (current_data, current_schema) = Self::load_data_from_source(current_source).await?;
+        
+        // Get original column count for filtering (exclude metadata)
+        let original_column_count = if options.exclude_metadata_columns {
+            baseline_schema.len() // Original columns from schema, not including snapbase metadata
+        } else {
+            baseline_data.first().map(|row| row.len()).unwrap_or(0)
+        };
+
+        let mut baseline_hashes = RowHashSet::new();
+        let mut current_hashes = RowHashSet::new();
+
+        // Build baseline hash set with filtering
+        for (index, row) in baseline_data.into_iter().enumerate() {
+            let filtered_row = if options.exclude_metadata_columns {
+                row.iter().take(original_column_count).cloned().collect()
+            } else {
+                row
+            };
+            let hash = Self::compute_row_hash(&filtered_row);
+            baseline_hashes.add_row(index as u64, hash);
+        }
+
+        // Build current hash set with filtering  
+        for (index, row) in current_data.into_iter().enumerate() {
+            let filtered_row = if options.exclude_metadata_columns {
+                row.iter().take(original_column_count).cloned().collect()
+            } else {
+                row
+            };
+            let hash = Self::compute_row_hash(&filtered_row);
+            current_hashes.add_row(index as u64, hash);
+        }
+
+        if let Some(callback) = progress_callback {
+            callback(StreamingProgress {
+                phase: StreamingPhase::BuildingHashSets,
+                processed_rows: baseline_hashes.len() as u64 + current_hashes.len() as u64,
+                total_rows: baseline_hashes.len() as u64 + current_hashes.len() as u64,
+                message: "Hash sets built successfully".to_string(),
+            });
+        }
+
+        Ok((baseline_hashes, current_hashes))
+    }
+
+    /// Phase 3: Analyze changed rows from data sources  
+    async fn analyze_changed_data_sources(
+        changed_rows: &ChangedRowsResult,
+        baseline_source: &DataSource,
+        current_source: &DataSource,
+        options: &ComparisonOptions,
+    ) -> Result<ChangeDetectionResult> {
+        // Load schemas for analysis
+        let (_, baseline_schema) = Self::load_data_from_source(baseline_source).await?;
+        let (_, current_schema) = Self::load_data_from_source(current_source).await?;
+
+        // Load only the changed rows 
+        let baseline_changed_data = Self::load_specific_rows_from_source(
+            baseline_source, 
+            &changed_rows.baseline_changed,
+            options
+        ).await?;
+        
+        let current_changed_data = Self::load_specific_rows_from_source(
+            current_source,
+            &changed_rows.current_changed, 
+            options
+        ).await?;
+
+        // Delegate to existing detailed analysis
+        Self::analyze_changed_rows(
+            changed_rows,
+            &baseline_schema,
+            &current_schema,
+            baseline_changed_data,
+            current_changed_data,
+        ).await
+    }
+
+    /// Load data from any data source type
+    async fn load_data_from_source(source: &DataSource) -> Result<(Vec<Vec<String>>, Vec<ColumnInfo>)> {
+        match source {
+            DataSource::File(path) => {
+                let mut processor = DataProcessor::new()?;
+                let data_info = processor.load_file(path)?;
+                let data = processor.stream_rows_async(None::<fn(u64, u64, &str)>).await?;
+                let row_data: Vec<Vec<String>> = data.into_iter().map(|(_, row)| row).collect();
+                Ok((row_data, data_info.columns))
+            },
+            DataSource::StoredSnapshot { path, workspace } => {
+                let mut processor = DataProcessor::new_with_workspace(workspace)?;
+                let data = processor.load_cloud_storage_data(path, workspace, true).await?;
+                
+                // For stored snapshots, we can infer the schema from the first row of data
+                // and exclude snapbase metadata columns
+                let mut columns = Vec::new();
+                if let Some(first_row) = data.first() {
+                    // Snapbase adds 5 metadata columns: __snapbase_removed, __snapbase_added, __snapbase_modified, snapshot_name, snapshot_timestamp
+                    let metadata_column_count = 5;
+                    let original_column_count = first_row.len().saturating_sub(metadata_column_count);
+                    
+                    for col_index in 0..original_column_count {
+                        columns.push(ColumnInfo {
+                            name: format!("column_{}", col_index),
+                            data_type: "TEXT".to_string(),
+                            nullable: true,
+                        });
+                    }
+                }
+                Ok((data, columns))
+            },
+            DataSource::DatabaseQuery { connection_string: _, query: _ } => {
+                // TODO: Implement database query support
+                unimplemented!("Database query support not yet implemented")
+            },
+        }
+    }
+
+    /// Load specific rows from any data source type
+    async fn load_specific_rows_from_source(
+        source: &DataSource,
+        row_indices: &[u64],
+        options: &ComparisonOptions,
+    ) -> Result<HashMap<u64, Vec<String>>> {
+        if row_indices.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        match source {
+            DataSource::File(path) => {
+                let mut processor = DataProcessor::new()?;
+                let _ = processor.load_file(path)?;
+                let full_data = processor.load_specific_rows(row_indices).await?;
+                
+                // Apply filtering if needed
+                if options.exclude_metadata_columns {
+                    // TODO: Get original column count and filter
+                    Ok(full_data)
+                } else {
+                    Ok(full_data)
+                }
+            },
+            DataSource::StoredSnapshot { path, workspace } => {
+                let mut processor = DataProcessor::new_with_workspace(workspace)?;
+                let full_data = processor.load_specific_rows_from_storage(path, workspace, row_indices).await?;
+                
+                // Apply filtering if needed  
+                if options.exclude_metadata_columns {
+                    // TODO: Get original column count and filter
+                    Ok(full_data)
+                } else {
+                    Ok(full_data)
+                }
+            },
+            DataSource::DatabaseQuery { connection_string: _, query: _ } => {
+                unimplemented!("Database query support not yet implemented")
+            },
+        }
     }
 }
 
