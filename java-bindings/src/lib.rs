@@ -98,8 +98,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeInit<'local>(
 ) {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
     
-    let result = workspace_handle.workspace.create_config_with_force(false)
-        .and_then(|_| workspace_handle.workspace.ensure_gitignore());
+    let result = workspace_handle.workspace.create_config_with_force(false);
     
     if let Err(_) = handle_result(&mut env, result) {
         // Error already thrown
@@ -307,7 +306,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDetectChanges<'
     // Convert storage path to DuckDB-accessible path
     let duckdb_data_path = workspace_handle.workspace.storage().get_duckdb_path(data_path);
     let baseline_row_data = match workspace_handle.runtime.block_on(async {
-        data_processor.load_cloud_storage_data(&duckdb_data_path, &workspace_handle.workspace).await
+        data_processor.load_cloud_storage_data(&duckdb_data_path, &workspace_handle.workspace, false).await
     }) {
         Ok(data) => data,
         Err(e) => {
@@ -752,7 +751,7 @@ fn create_hive_snapshot(
 
     // Create timestamp
     let timestamp = Utc::now();
-    let timestamp_str = timestamp.format("%Y%m%dT%H%M%SZ").to_string();
+    let timestamp_str = timestamp.format("%Y%m%dT%H%M%S%.6fZ").to_string();
     
     // Create Hive directory structure path
     let hive_path_str = path_utils::join_for_storage_backend(&[

@@ -502,9 +502,47 @@ impl DataProcessor {
                     duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                     duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                     duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    duckdb::types::ValueRef::Date32(d) => {
+                        // Convert days since epoch to proper date format
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                    duckdb::types::ValueRef::Time64(unit, t) => {
+                        // Convert microseconds since midnight to HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                } else {
+                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                }
+                            }
+                            _ => format!("{t:?}"), // Fallback for other time units
+                        }
+                    },
+                    duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"), // Fallback for other time units
+                        }
+                    },
                     _ => "<unknown>".to_string(),
                 };
                 string_row.push(value);
@@ -586,9 +624,47 @@ impl DataProcessor {
                     duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                     duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                     duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    duckdb::types::ValueRef::Date32(d) => {
+                        // Convert days since epoch to proper date format
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                    duckdb::types::ValueRef::Time64(unit, t) => {
+                        // Convert microseconds since midnight to HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                } else {
+                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                }
+                            }
+                            _ => format!("{t:?}"), // Fallback for other time units
+                        }
+                    },
+                    duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"), // Fallback for other time units
+                        }
+                    },
                     _ => "<unknown>".to_string(),
                 };
                 string_row.push(value);
@@ -769,24 +845,32 @@ impl DataProcessor {
         
         self.connection.execute(&create_sql, [])?;
         
-        // Insert data
+        // Insert data using DuckDB parameterized queries (proper way)
         if !flag_data.is_empty() {
+            // Build placeholders for parameterized query
+            let placeholders: Vec<String> = (0..schema.len()).map(|_| "?".to_string()).collect();
+            let insert_sql = format!(
+                "INSERT INTO temp_flag_data VALUES ({})",
+                placeholders.join(", ")
+            );
+            
+            let mut stmt = self.connection.prepare(&insert_sql)?;
+            
             for (row_data, removed, added, modified) in flag_data {
-                let mut insert_sql = String::from("INSERT INTO temp_flag_data VALUES (");
+                // Build parameter slice - DuckDB will handle type conversion automatically
+                let mut params: Vec<&dyn duckdb::ToSql> = Vec::new();
                 
-                // Add original data columns
-                for (j, value) in row_data.iter().enumerate() {
-                    if j > 0 {
-                        insert_sql.push_str(", ");
-                    }
-                    insert_sql.push_str(&format!("'{}'", value.replace("'", "''")));
+                // Add original data columns as string references
+                for value in row_data.iter() {
+                    params.push(value);
                 }
                 
                 // Add flag columns
-                insert_sql.push_str(&format!(", {removed}, {added}, {modified}"));
-                insert_sql.push(')');
+                params.push(removed);
+                params.push(added); 
+                params.push(modified);
                 
-                self.connection.execute(&insert_sql, [])?;
+                stmt.execute(&params[..])?;
             }
         }
         
@@ -811,24 +895,23 @@ impl DataProcessor {
         
         self.connection.execute(&create_sql, [])?;
         
-        // Insert baseline data
+        // Insert baseline data using parameterized queries
         if !baseline.data.is_empty() {
-            let mut insert_sql = String::from("INSERT INTO baseline_data VALUES ");
-            for (row_idx, row) in baseline.data.iter().enumerate() {
-                if row_idx > 0 {
-                    insert_sql.push_str(", ");
-                }
-                insert_sql.push('(');
-                for (col_idx, value) in row.iter().enumerate() {
-                    if col_idx > 0 {
-                        insert_sql.push_str(", ");
-                    }
-                    insert_sql.push_str(&format!("'{}'", value.replace("'", "''")));
-                }
-                insert_sql.push(')');
-            }
+            // Build placeholders for parameterized query
+            let num_cols = baseline.schema.len();
+            let placeholders: Vec<String> = (0..num_cols).map(|_| "?".to_string()).collect();
+            let insert_sql = format!(
+                "INSERT INTO baseline_data VALUES ({})",
+                placeholders.join(", ")
+            );
             
-            self.connection.execute(&insert_sql, [])?;
+            let mut stmt = self.connection.prepare(&insert_sql)?;
+            
+            for row in &baseline.data {
+                // Build parameter slice - DuckDB will handle type conversion automatically
+                let params: Vec<&dyn duckdb::ToSql> = row.iter().map(|v| v as &dyn duckdb::ToSql).collect();
+                stmt.execute(&params[..])?;
+            }
         }
         
         Ok(())
@@ -893,9 +976,47 @@ impl DataProcessor {
                         duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                         duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                         duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                        duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                        duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                        duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                        duckdb::types::ValueRef::Date32(d) => {
+                        // Convert days since epoch to proper date format
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                        duckdb::types::ValueRef::Time64(unit, t) => {
+                        // Convert microseconds since midnight to HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                } else {
+                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                }
+                            }
+                            _ => format!("{t:?}"), // Fallback for other time units
+                        }
+                    },
+                        duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"), // Fallback for other time units
+                        }
+                    },
                         _ => "<unknown>".to_string(),
                     };
                     string_row.push(value);
@@ -939,9 +1060,47 @@ impl DataProcessor {
                         duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                         duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                         duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                        duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                        duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                        duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                        duckdb::types::ValueRef::Date32(d) => {
+                        // Convert days since epoch to proper date format
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                        duckdb::types::ValueRef::Time64(unit, t) => {
+                        // Convert microseconds since midnight to HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                } else {
+                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                }
+                            }
+                            _ => format!("{t:?}"), // Fallback for other time units
+                        }
+                    },
+                        duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"), // Fallback for other time units
+                        }
+                    },
                         _ => "<unknown>".to_string(),
                     };
                     string_row.push(value);
@@ -1005,9 +1164,47 @@ impl DataProcessor {
                     duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                     duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                     duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    duckdb::types::ValueRef::Date32(d) => {
+                        // Convert days since epoch to proper date format
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                    duckdb::types::ValueRef::Time64(unit, t) => {
+                        // Convert microseconds since midnight to HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                } else {
+                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                }
+                            }
+                            _ => format!("{t:?}"), // Fallback for other time units
+                        }
+                    },
+                    duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"), // Fallback for other time units
+                        }
+                    },
                     _ => "<unknown>".to_string(),
                 };
                 row_values.push(value);
@@ -1237,9 +1434,47 @@ impl DataProcessor {
                 Ok(duckdb::types::ValueRef::Decimal(d)) => d.to_string(),
                 Ok(duckdb::types::ValueRef::Text(s)) => String::from_utf8_lossy(s).to_string(),
                 Ok(duckdb::types::ValueRef::Blob(b)) => format!("<blob:{} bytes>", b.len()),
-                Ok(duckdb::types::ValueRef::Date32(d)) => format!("{d:?}"),
-                Ok(duckdb::types::ValueRef::Time64(t, _)) => format!("{t:?}"),
-                Ok(duckdb::types::ValueRef::Timestamp(ts, _)) => format!("{ts:?}"),
+                Ok(duckdb::types::ValueRef::Date32(d)) => {
+                    // Convert days since epoch to proper date format
+                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    let date = epoch + chrono::Duration::days(d as i64);
+                    date.format("%Y-%m-%d").to_string()
+                },
+                Ok(duckdb::types::ValueRef::Time64(unit, t)) => {
+                    // Convert microseconds since midnight to HH:MM:SS format
+                    match unit {
+                        duckdb::types::TimeUnit::Microsecond => {
+                            let total_seconds = t / 1_000_000;
+                            let hours = total_seconds / 3600;
+                            let minutes = (total_seconds % 3600) / 60;
+                            let seconds = total_seconds % 60;
+                            let microseconds = t % 1_000_000;
+                            if microseconds > 0 {
+                                format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                            } else {
+                                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                            }
+                        }
+                        _ => format!("{t:?}"), // Fallback for other time units
+                    }
+                },
+                Ok(duckdb::types::ValueRef::Timestamp(unit, ts)) => {
+                    // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                    match unit {
+                        duckdb::types::TimeUnit::Microsecond => {
+                            let seconds = ts / 1_000_000;
+                            let microseconds = ts % 1_000_000;
+                            let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                            if microseconds > 0 {
+                                datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                            } else {
+                                datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                            }
+                        }
+                        _ => format!("{ts:?}"), // Fallback for other time units
+                    }
+                },
                 _ => String::new(), // Handle any other types or errors
             };
             row_values.push(value);
@@ -1335,10 +1570,16 @@ impl DataProcessor {
     pub async fn load_cloud_storage_data(
         &mut self,
         data_path: &str,
-        _workspace: &crate::workspace::SnapbaseWorkspace,
+        workspace: &crate::workspace::SnapbaseWorkspace,
+        exclude_removed: bool
     ) -> Result<Vec<Vec<String>>> {
-        // Use DuckDB to read parquet file from S3 directly
-        let query = format!("SELECT * FROM read_parquet('{data_path}')");
+        // Convert storage path to DuckDB-compatible path (handles both local and S3)
+        let duckdb_path = workspace.storage().get_duckdb_path(data_path);
+        
+        let query = match exclude_removed {
+            false => format!("SELECT * FROM read_parquet('{duckdb_path}')"),
+            true => format!("SELECT * FROM read_parquet('{duckdb_path}') where __snapbase_removed = false")
+        };
         
         let mut stmt = self.connection.prepare(&query)
             .map_err(|e| crate::error::SnapbaseError::data_processing(
@@ -1367,9 +1608,47 @@ impl DataProcessor {
                     duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                     duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                     duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    duckdb::types::ValueRef::Date32(d) => {
+                        // Convert days since epoch to proper date format
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                    duckdb::types::ValueRef::Time64(unit, t) => {
+                        // Convert microseconds since midnight to HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                } else {
+                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                }
+                            }
+                            _ => format!("{t:?}"), // Fallback for other time units
+                        }
+                    },
+                    duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"), // Fallback for other time units
+                        }
+                    },
                     _ => "<unknown>".to_string(),
                 };
                 string_row.push(value);
@@ -1385,6 +1664,7 @@ impl DataProcessor {
                 format!("Failed to process cloud storage row: {e}")
             ))?);
         }
+
 
         Ok(all_rows)
     }

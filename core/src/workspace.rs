@@ -150,9 +150,7 @@ impl SnapbaseWorkspace {
             
             // Create initial config file
             workspace.create_config()?;
-            
-            // Update .gitignore
-            workspace.ensure_gitignore()?;
+
         }
         
         log::info!("Created snapbase workspace at: {}", workspace.root.display());
@@ -560,30 +558,7 @@ region = "{}"
         sections.join("\n")
     }
     
-    /// Ensure .gitignore contains snapbase entries
-    pub fn ensure_gitignore(&self) -> Result<()> {
-        let gitignore_path = self.root.join(".gitignore");
-        let snapbase_ignore = "# Ignore compressed snapshot archives\n.snapbase/*.snapbase\n";
-        
-        if gitignore_path.exists() {
-            let content = fs::read_to_string(&gitignore_path)?;
-            if !content.contains(".snapbase/*.snapbase") {
-                let new_content = if content.ends_with('\n') {
-                    format!("{content}\n{snapbase_ignore}")
-                } else {
-                    format!("{content}\n\n{snapbase_ignore}")
-                };
-                fs::write(gitignore_path, new_content)?;
-                log::info!("Updated .gitignore with snapbase entries");
-            }
-        } else {
-            fs::write(gitignore_path, snapbase_ignore)?;
-            log::info!("Created .gitignore with snapbase entries");
-        }
-        
-        Ok(())
-    }
-    
+
     /// Save storage configuration to workspace config
     pub fn save_storage_config(&self, storage_config: &crate::config::StorageConfig) -> Result<()> {
         // Create/update snapbase.toml file in the workspace root

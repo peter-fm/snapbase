@@ -19,6 +19,7 @@ use snapbase_core::hash;
 use snapbase_core::path_utils;
 use snapbase_core::sql;
 use std::path::Path;
+use chrono;
 
 /// Execute a command
 pub fn execute_command(command: Commands, workspace_path: Option<&Path>) -> Result<()> {
@@ -203,7 +204,7 @@ fn export_command(
         } else {
             workspace.root.join(".snapbase").join(data_path).to_string_lossy().to_string()
         };
-        data_processor.load_cloud_storage_data(&absolute_data_path, &workspace).await
+        data_processor.load_cloud_storage_data(&absolute_data_path, &workspace, true).await
     })?;
     
     // Determine output format from file extension
@@ -479,7 +480,7 @@ fn snapshot_command(
     let hive_display_path = std::path::Path::new("sources")
         .join(input)
         .join(format!("snapshot_name={snapshot_name}"))
-        .join(format!("snapshot_timestamp={}/", metadata.created.format("%Y%m%dT%H%M%SZ")));
+        .join(format!("snapshot_timestamp={}/", metadata.created.format("%Y%m%dT%H%M%S%.6fZ")));
     println!("└─ Hive path: {}", hive_display_path.display());
 
     Ok(())
@@ -663,7 +664,7 @@ fn show_command(
                 .map(|path| Path::new(path).file_name().unwrap().to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
             
-            let timestamp_str = snapshot_metadata.created.format("%Y%m%dT%H%M%SZ").to_string();
+            let timestamp_str = snapshot_metadata.created.format("%Y%m%dT%H%M%S%.6fZ").to_string();
             let hive_path_str = path_utils::join_for_storage_backend(&[
                 "sources",
                 &source_name,
@@ -778,18 +779,19 @@ fn status_command(
             name: comparison_snapshot.name.clone(),
         });
     };
-    
+
     
     // Load baseline snapshot data from Hive storage
     let data_path = comparison_snapshot.data_path.as_ref().ok_or_else(|| {
         SnapbaseError::archive("Baseline snapshot has no data path")
     })?;
-    
+
+
     let rt = tokio::runtime::Runtime::new()?;
     let mut data_processor = DataProcessor::new_with_workspace(&workspace)?;
-    let duckdb_data_path = workspace.storage().get_duckdb_path(data_path);
+
     let baseline_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(&duckdb_data_path, &workspace).await
+        data_processor.load_cloud_storage_data(&data_path, &workspace, false).await
     })?;
 
     // Load current data
@@ -1198,7 +1200,7 @@ fn create_hive_snapshot(
     
     // Create timestamp
     let timestamp = Utc::now();
-    let timestamp_str = timestamp.format("%Y%m%dT%H%M%SZ").to_string();
+    let timestamp_str = timestamp.format("%Y%m%dT%H%M%S%.6fZ").to_string();
     
     // Create Hive directory structure path using storage-backend-aware path construction
     let hive_path_str = path_utils::join_for_storage_backend(&[
@@ -1630,9 +1632,47 @@ fn load_parquet_data_from_storage(
                 duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                 duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                 duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                duckdb::types::ValueRef::Date32(d) => {
+                    // Convert days since epoch to proper date format
+                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    let date = epoch + chrono::Duration::days(d as i64);
+                    date.format("%Y-%m-%d").to_string()
+                },
+                duckdb::types::ValueRef::Time64(unit, t) => {
+                    // Convert microseconds since midnight to HH:MM:SS format
+                    match unit {
+                        duckdb::types::TimeUnit::Microsecond => {
+                            let total_seconds = t / 1_000_000;
+                            let hours = total_seconds / 3600;
+                            let minutes = (total_seconds % 3600) / 60;
+                            let seconds = total_seconds % 60;
+                            let microseconds = t % 1_000_000;
+                            if microseconds > 0 {
+                                format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                            } else {
+                                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                            }
+                        }
+                        _ => format!("{t:?}"), // Fallback for other time units
+                    }
+                },
+                duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                    // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                    match unit {
+                        duckdb::types::TimeUnit::Microsecond => {
+                            let seconds = ts / 1_000_000;
+                            let microseconds = ts % 1_000_000;
+                            let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                            if microseconds > 0 {
+                                datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                            } else {
+                                datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                            }
+                        }
+                        _ => format!("{ts:?}"), // Fallback for other time units
+                    }
+                },
                 _ => "<unknown>".to_string(),
             };
             string_row.push(value);
@@ -1731,24 +1771,25 @@ fn diff_command(
     let from_data_path = from_resolved.data_path.as_ref().ok_or_else(|| {
         SnapbaseError::archive("From snapshot has no data path")
     })?;
-    
+
     let to_data_path = to_resolved.data_path.as_ref().ok_or_else(|| {
         SnapbaseError::archive("To snapshot has no data path")  
     })?;
-    
+
     let mut progress_reporter = ProgressReporter::new_for_diff();
     progress_reporter.update_archive("Loading snapshot data...");
     
     let from_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(from_data_path, &workspace).await
+        data_processor.load_cloud_storage_data(from_data_path, &workspace, false).await
     })?;
-    
+    println!("FROM DATA {:?}", from_row_data);
     progress_reporter.update_archive("Loading comparison data...");
     
     let to_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(to_data_path, &workspace).await
+        data_processor.load_cloud_storage_data(to_data_path, &workspace, false).await
     })?;
-    
+    println!("TO DATA {:?}", to_row_data);
+
     progress_reporter.update_archive("Detecting changes...");
     
     // Perform change detection

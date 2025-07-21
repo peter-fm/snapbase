@@ -125,7 +125,7 @@ impl SnapshotResolver {
                 "unknown".to_string()
             };
             
-            let timestamp_str = snapshot_metadata.created.format("%Y%m%dT%H%M%SZ").to_string();
+            let timestamp_str = snapshot_metadata.created.format("%Y%m%dT%H%M%S%.6fZ").to_string();
             let hive_path = Path::new("sources")
                 .join(&source_relative_path)
                 .join(format!("snapshot_name={name}"))

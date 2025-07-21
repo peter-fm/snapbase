@@ -256,7 +256,7 @@ impl SnapshotCreator {
         workspace_base: &Path,
     ) -> Result<()> {
         // Generate timestamp for Hive partitioning
-        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string();
         
         // Extract source name from path
         let source_name = data_info.source.file_name()
@@ -448,9 +448,47 @@ impl SnapshotCreator {
                     duckdb::types::ValueRef::Decimal(d) => d.to_string(),
                     duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
                     duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                    duckdb::types::ValueRef::Date32(d) => format!("{d:?}"),
-                    duckdb::types::ValueRef::Time64(t, _) => format!("{t:?}"),
-                    duckdb::types::ValueRef::Timestamp(ts, _) => format!("{ts:?}"),
+                    duckdb::types::ValueRef::Date32(d) => {
+                        // Convert days since epoch to proper date format
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                    duckdb::types::ValueRef::Time64(unit, t) => {
+                        // Convert microseconds since midnight to HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                } else {
+                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                }
+                            }
+                            _ => format!("{t:?}"), // Fallback for other time units
+                        }
+                    },
+                    duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"), // Fallback for other time units
+                        }
+                    },
                     _ => "<unknown>".to_string(),
                 };
                 string_row.push(value);

@@ -46,10 +46,7 @@ impl Workspace {
     fn init(&mut self) -> PyResult<()> {
         self.workspace.create_config_with_force(false)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to initialize workspace: {}", e)))?;
-        
-        self.workspace.ensure_gitignore()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create .gitignore: {}", e)))?;
-        
+
         Ok(())
     }
 
@@ -145,7 +142,7 @@ impl Workspace {
         // Convert storage path to DuckDB-accessible path
         let duckdb_data_path = self.workspace.storage().get_duckdb_path(data_path);
         let baseline_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&duckdb_data_path, &self.workspace).await
+            data_processor.load_cloud_storage_data(&duckdb_data_path, &self.workspace, false).await
         }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load baseline data: {}", e)))?;
         
         // Load current data
@@ -304,11 +301,11 @@ impl Workspace {
         let duckdb_to_path = self.workspace.storage().get_duckdb_path(to_data_path);
         
         let from_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&duckdb_from_path, &self.workspace).await
+            data_processor.load_cloud_storage_data(&duckdb_from_path, &self.workspace, false).await
         }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load from data: {}", e)))?;
         
         let to_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&duckdb_to_path, &self.workspace).await
+            data_processor.load_cloud_storage_data(&duckdb_to_path, &self.workspace, false).await
         }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load to data: {}", e)))?;
         
         // Perform change detection
@@ -362,7 +359,7 @@ fn create_hive_snapshot(
 
     // Create timestamp
     let timestamp = Utc::now();
-    let timestamp_str = timestamp.format("%Y%m%dT%H%M%SZ").to_string();
+    let timestamp_str = timestamp.format("%Y%m%dT%H%M%S%.6fZ").to_string();
     
     // Create Hive directory structure path
     let hive_path_str = path_utils::join_for_storage_backend(&[
