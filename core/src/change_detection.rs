@@ -1,12 +1,571 @@
-//! Comprehensive change detection and rollback system for snapbase
+//! Memory-efficient streaming change detection system for snapbase
 
 use crate::error::Result;
 use crate::hash::ColumnInfo;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // Type alias for complex return types
 type ChangeResult = (Vec<(u64, u64)>, Vec<u64>, Vec<u64>);
+
+/// Memory-efficient streaming change detector
+pub struct StreamingChangeDetector;
+
+/// Lightweight row hash with index for memory efficiency
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RowHashEntry {
+    pub row_index: u64,
+    pub hash: String,
+}
+
+/// Set of row hashes for efficient comparison
+#[derive(Debug)]
+pub struct RowHashSet {
+    pub hashes: HashMap<String, Vec<u64>>, // hash -> list of row_indices (handles duplicates)
+    pub indices: HashSet<u64>,             // set of row indices for fast lookup
+}
+
+/// Identifies which rows have changed between datasets
+#[derive(Debug)]
+pub struct ChangedRowsResult {
+    pub baseline_changed: Vec<u64>,   // row indices in baseline that are modified/removed
+    pub current_changed: Vec<u64>,    // row indices in current that are modified/added  
+    pub unchanged_count: usize,       // number of rows that didn't change
+}
+
+impl Default for RowHashSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RowHashSet {
+    pub fn new() -> Self {
+        Self {
+            hashes: HashMap::new(),
+            indices: HashSet::new(),
+        }
+    }
+    
+    pub fn add_row(&mut self, row_index: u64, hash: String) {
+        self.hashes.entry(hash).or_insert_with(Vec::new).push(row_index);
+        self.indices.insert(row_index);
+    }
+    
+    pub fn contains_hash(&self, hash: &str) -> bool {
+        self.hashes.contains_key(hash)
+    }
+    
+    pub fn get_rows_by_hash(&self, hash: &str) -> Option<&Vec<u64>> {
+        self.hashes.get(hash)
+    }
+    
+    pub fn get_first_row_by_hash(&self, hash: &str) -> Option<u64> {
+        self.hashes.get(hash).and_then(|rows| rows.first().copied())
+    }
+    
+    pub fn len(&self) -> usize {
+        self.hashes.len()
+    }
+}
+
+impl StreamingChangeDetector {
+    /// Memory-efficient streaming change detection - Phase 1: Build hash sets
+    /// This streams through both datasets once to build lightweight hash sets
+    pub async fn build_row_hash_sets<F1, F2, Fut1, Fut2>(
+        mut baseline_stream: F1,
+        mut current_stream: F2,
+        progress_callback: Option<&dyn Fn(u64, u64, &str)>,
+    ) -> Result<(RowHashSet, RowHashSet)>
+    where
+        F1: FnMut() -> Fut1,
+        F2: FnMut() -> Fut2,
+        Fut1: std::future::Future<Output = Result<Option<(u64, Vec<String>)>>>,
+        Fut2: std::future::Future<Output = Result<Option<(u64, Vec<String>)>>>,
+    {
+        let mut baseline_hashes = RowHashSet::new();
+        let mut current_hashes = RowHashSet::new();
+        
+        let mut processed_baseline = 0u64;
+        let mut processed_current = 0u64;
+        
+        // Phase 1a: Stream baseline dataset and build hash set
+        if let Some(callback) = progress_callback {
+            callback(0, 0, "Building baseline hash set...");
+        }
+        
+        loop {
+            match baseline_stream().await? {
+                Some((row_index, row_data)) => {
+                    let hash = Self::compute_row_hash(&row_data);
+                    baseline_hashes.add_row(row_index, hash);
+                    processed_baseline += 1;
+                    
+                    if processed_baseline % 50000 == 0 {
+                        if let Some(callback) = progress_callback {
+                            callback(processed_baseline, 0, "Processing baseline rows...");
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+        
+        // Phase 1b: Stream current dataset and build hash set
+        if let Some(callback) = progress_callback {
+            callback(processed_baseline, 0, "Building current hash set...");
+        }
+        
+        loop {
+            match current_stream().await? {
+                Some((row_index, row_data)) => {
+                    let hash = Self::compute_row_hash(&row_data);
+                    current_hashes.add_row(row_index, hash);
+                    processed_current += 1;
+                    
+                    if processed_current % 50000 == 0 {
+                        if let Some(callback) = progress_callback {
+                            callback(processed_baseline + processed_current, 0, "Processing current rows...");
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+        
+        if let Some(callback) = progress_callback {
+            callback(
+                processed_baseline + processed_current, 
+                processed_baseline + processed_current, 
+                "Hash sets built successfully"
+            );
+        }
+        
+        Ok((baseline_hashes, current_hashes))
+    }
+    
+    /// Phase 2: Compare hash sets to identify changed rows (memory efficient)
+    pub fn identify_changed_rows(
+        baseline_hashes: &RowHashSet,
+        current_hashes: &RowHashSet,
+    ) -> ChangedRowsResult {
+        let mut baseline_changed = Vec::new();
+        let mut current_changed = Vec::new();
+        let mut unchanged_count = 0;
+        
+        // Find rows in baseline that don't exist in current (removed or modified)
+        for (hash, row_indices) in &baseline_hashes.hashes {
+            if !current_hashes.contains_hash(hash) {
+                // All instances of this hash are removed/modified
+                baseline_changed.extend(row_indices);
+            } else {
+                // This hash exists in both datasets - count as unchanged
+                unchanged_count += row_indices.len();
+            }
+        }
+        
+        // Find rows in current that don't exist in baseline (added or modified)
+        for (hash, row_indices) in &current_hashes.hashes {
+            if !baseline_hashes.contains_hash(hash) {
+                // All instances of this hash are added/modified
+                current_changed.extend(row_indices);
+            }
+        }
+        
+        ChangedRowsResult {
+            baseline_changed,
+            current_changed,
+            unchanged_count,
+        }
+    }
+    
+    /// Phase 3: Load only changed rows and perform detailed analysis
+    /// This is where we load the actual row data for changed rows only
+    pub async fn analyze_changed_rows(
+        changed_rows: &ChangedRowsResult,
+        baseline_schema: &[ColumnInfo],
+        current_schema: &[ColumnInfo],
+        baseline_changed_data: HashMap<u64, Vec<String>>,
+        current_changed_data: HashMap<u64, Vec<String>>,
+    ) -> Result<ChangeDetectionResult>
+    {
+        // Perform detailed analysis only on changed rows
+        let schema_changes = Self::detect_schema_changes(baseline_schema, current_schema)?;
+        let row_changes = Self::classify_changed_rows_detailed(
+            changed_rows,
+            baseline_schema,
+            current_schema,
+            &baseline_changed_data,
+            &current_changed_data,
+        )?;
+        
+        Ok(ChangeDetectionResult {
+            schema_changes,
+            row_changes,
+        })
+    }
+    
+    /// Classify changed rows into additions, modifications, and removals
+    /// This operates only on the subset of changed rows, not the entire dataset
+    fn classify_changed_rows_detailed(
+        changed_rows: &ChangedRowsResult,
+        baseline_schema: &[ColumnInfo],
+        current_schema: &[ColumnInfo],
+        baseline_data: &HashMap<u64, Vec<String>>,
+        current_data: &HashMap<u64, Vec<String>>,
+    ) -> Result<RowChanges> {
+        // Create column mapping for schema-aware comparison
+        let common_columns = Self::find_common_columns(baseline_schema, current_schema);
+        
+        let mut modifications = Vec::new();
+        let mut genuine_additions = Vec::new();
+        let mut genuine_removals = Vec::new();
+        
+        // Strategy: Use content-based matching to identify modifications vs genuine adds/removes
+        // Since we already know these rows changed (different hashes), we need to determine
+        // if they're modifications of existing rows or genuine additions/removals
+        
+        let mut unmatched_baseline: Vec<u64> = changed_rows.baseline_changed.clone();
+        let mut unmatched_current: Vec<u64> = changed_rows.current_changed.clone();
+        
+        // Try to match changed baseline rows with changed current rows based on similarity
+        if !unmatched_baseline.is_empty() && !unmatched_current.is_empty() && !common_columns.is_empty() {
+            let matches = Self::find_content_matches_from_maps(
+                &unmatched_baseline,
+                &unmatched_current,
+                baseline_data,
+                current_data,
+                &common_columns,
+                baseline_schema,
+                current_schema,
+            )?;
+            
+            // Record matched pairs as modifications
+            for (baseline_idx, current_idx) in matches {
+                // Perform detailed cell-level analysis
+                if let (Some(baseline_row), Some(current_row)) = 
+                    (baseline_data.get(&baseline_idx), current_data.get(&current_idx)) {
+                    
+                    let changes = Self::compare_rows_schema_aware_from_schemas(
+                        baseline_row,
+                        current_row,
+                        baseline_schema,
+                        current_schema,
+                    );
+                    
+                    if !changes.is_empty() {
+                        modifications.push(RowModification {
+                            row_index: current_idx,
+                            changes,
+                        });
+                    }
+                }
+                
+                // Remove from unmatched lists
+                unmatched_baseline.retain(|&x| x != baseline_idx);
+                unmatched_current.retain(|&x| x != current_idx);
+            }
+        }
+        
+        // Remaining unmatched baseline rows are genuine removals
+        for &baseline_idx in &unmatched_baseline {
+            if let Some(baseline_row) = baseline_data.get(&baseline_idx) {
+                let mut data = HashMap::new();
+                for (col_idx, col) in baseline_schema.iter().enumerate() {
+                    if let Some(value) = baseline_row.get(col_idx) {
+                        data.insert(col.name.clone(), value.clone());
+                    }
+                }
+                genuine_removals.push(RowRemoval {
+                    row_index: baseline_idx,
+                    data,
+                });
+            }
+        }
+        
+        // Remaining unmatched current rows are genuine additions
+        for &current_idx in &unmatched_current {
+            if let Some(current_row) = current_data.get(&current_idx) {
+                let mut data = HashMap::new();
+                for (col_idx, col) in current_schema.iter().enumerate() {
+                    if let Some(value) = current_row.get(col_idx) {
+                        data.insert(col.name.clone(), value.clone());
+                    }
+                }
+                genuine_additions.push(RowAddition {
+                    row_index: current_idx,
+                    data,
+                });
+            }
+        }
+        
+        Ok(RowChanges {
+            modified: modifications,
+            added: genuine_additions,
+            removed: genuine_removals,
+        })
+    }
+    
+    /// Find content matches between changed baseline and current rows using similarity scoring
+    fn find_content_matches_from_maps(
+        baseline_indices: &[u64],
+        current_indices: &[u64],
+        baseline_data: &HashMap<u64, Vec<String>>,
+        current_data: &HashMap<u64, Vec<String>>,
+        common_columns: &[String],
+        baseline_schema: &[ColumnInfo],
+        current_schema: &[ColumnInfo],
+    ) -> Result<Vec<(u64, u64)>> {
+        // Create column index mappings
+        let baseline_col_map: HashMap<String, usize> = baseline_schema
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.name.clone(), i))
+            .collect();
+            
+        let current_col_map: HashMap<String, usize> = current_schema
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.name.clone(), i))
+            .collect();
+        
+        let mut matches = Vec::new();
+        let mut used_current_indices = HashSet::new();
+        
+        // For each baseline row, find the best matching current row
+        for &baseline_idx in baseline_indices {
+            if let Some(baseline_row) = baseline_data.get(&baseline_idx) {
+                let mut best_match = None;
+                let mut best_similarity = 0.5; // Minimum threshold
+                
+                for &current_idx in current_indices {
+                    if used_current_indices.contains(&current_idx) {
+                        continue; // Already matched
+                    }
+                    
+                    if let Some(current_row) = current_data.get(&current_idx) {
+                        let similarity = Self::calculate_row_similarity_with_maps(
+                            baseline_row,
+                            current_row,
+                            common_columns,
+                            &baseline_col_map,
+                            &current_col_map,
+                        );
+                        
+                        if similarity > best_similarity {
+                            best_similarity = similarity;
+                            best_match = Some(current_idx);
+                        }
+                    }
+                }
+                
+                // Record the best match if found
+                if let Some(matched_current_idx) = best_match {
+                    matches.push((baseline_idx, matched_current_idx));
+                    used_current_indices.insert(matched_current_idx);
+                }
+            }
+        }
+        
+        Ok(matches)
+    }
+    
+    /// Calculate similarity between two rows using column mappings
+    fn calculate_row_similarity_with_maps(
+        baseline_row: &[String],
+        current_row: &[String],
+        common_columns: &[String],
+        baseline_col_map: &HashMap<String, usize>,
+        current_col_map: &HashMap<String, usize>,
+    ) -> f64 {
+        let mut matches = 0;
+        let mut total = 0;
+        
+        for col_name in common_columns {
+            if let (Some(&baseline_idx), Some(&current_idx)) = 
+                (baseline_col_map.get(col_name), current_col_map.get(col_name)) {
+                
+                if let (Some(baseline_val), Some(current_val)) = 
+                    (baseline_row.get(baseline_idx), current_row.get(current_idx)) {
+                    
+                    total += 1;
+                    if baseline_val == current_val {
+                        matches += 1;
+                    }
+                }
+            }
+        }
+        
+        if total > 0 {
+            matches as f64 / total as f64
+        } else {
+            0.0
+        }
+    }
+    
+    /// Compare rows with schema awareness using schema arrays
+    fn compare_rows_schema_aware_from_schemas(
+        baseline_row: &[String],
+        current_row: &[String],
+        baseline_schema: &[ColumnInfo],
+        current_schema: &[ColumnInfo],
+    ) -> HashMap<String, CellChange> {
+        let mut changes = HashMap::new();
+        
+        // Create column mappings
+        let current_col_map: HashMap<String, usize> = current_schema
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.name.clone(), i))
+            .collect();
+        
+        // Compare common columns only
+        for (baseline_idx, baseline_col) in baseline_schema.iter().enumerate() {
+            if let Some(&current_idx) = current_col_map.get(&baseline_col.name) {
+                let baseline_value = baseline_row.get(baseline_idx).map(|s| s.as_str()).unwrap_or("");
+                let current_value = current_row.get(current_idx).map(|s| s.as_str()).unwrap_or("");
+                
+                if baseline_value != current_value {
+                    changes.insert(baseline_col.name.clone(), CellChange {
+                        before: baseline_value.to_string(),
+                        after: current_value.to_string(),
+                    });
+                }
+            }
+        }
+        
+        changes
+    }
+    
+    /// Find common columns between schemas
+    fn find_common_columns(baseline_schema: &[ColumnInfo], current_schema: &[ColumnInfo]) -> Vec<String> {
+        let current_names: HashSet<_> = current_schema.iter().map(|c| &c.name).collect();
+        baseline_schema
+            .iter()
+            .filter_map(|col| {
+                if current_names.contains(&col.name) {
+                    Some(col.name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    
+    /// Schema change detection (unchanged from original)
+    fn detect_schema_changes(
+        baseline: &[ColumnInfo],
+        current: &[ColumnInfo],
+    ) -> Result<SchemaChanges> {
+        let baseline_names: Vec<String> = baseline.iter().map(|c| c.name.clone()).collect();
+        let current_names: Vec<String> = current.iter().map(|c| c.name.clone()).collect();
+
+        // Detect column order changes (if column names are reordered)
+        let column_order = if baseline_names != current_names && baseline.len() == current.len() {
+            // Check if it's just a reordering (same columns, different order)
+            let mut baseline_sorted = baseline_names.clone();
+            let mut current_sorted = current_names.clone();
+            baseline_sorted.sort();
+            current_sorted.sort();
+            
+            if baseline_sorted == current_sorted {
+                Some(ColumnOrderChange {
+                    before: baseline_names.clone(),
+                    after: current_names.clone(),
+                })
+            } else {
+                None // Not just reordering, there are additions/removals/renames
+            }
+        } else {
+            None
+        };
+
+        let mut columns_added = Vec::new();
+        let mut columns_removed = Vec::new();
+        let mut columns_renamed = Vec::new();
+        let mut type_changes = Vec::new();
+
+        // Handle different column counts (additions/removals)
+        if baseline.len() != current.len() {
+            if current.len() > baseline.len() {
+                // Columns were added at the end
+                for (pos, col) in current.iter().enumerate().skip(baseline.len()) {
+                    columns_added.push(ColumnAddition {
+                        name: col.name.clone(),
+                        data_type: col.data_type.clone(),
+                        position: pos,
+                        nullable: col.nullable,
+                        default_value: None,
+                    });
+                }
+            } else {
+                // Columns were removed from the end
+                for (pos, col) in baseline.iter().enumerate().skip(current.len()) {
+                    columns_removed.push(ColumnRemoval {
+                        name: col.name.clone(),
+                        data_type: col.data_type.clone(),
+                        position: pos,
+                        nullable: col.nullable,
+                    });
+                }
+            }
+        }
+
+        // Compare columns position by position (for common length)
+        let min_len = baseline.len().min(current.len());
+        for pos in 0..min_len {
+            let baseline_col = &baseline[pos];
+            let current_col = &current[pos];
+
+            // Check for column rename at this position
+            if baseline_col.name != current_col.name {
+                columns_renamed.push(ColumnRename {
+                    from: baseline_col.name.clone(),
+                    to: current_col.name.clone(),
+                });
+            }
+
+            // Check for type change at this position
+            if baseline_col.data_type != current_col.data_type {
+                type_changes.push(TypeChange {
+                    column: current_col.name.clone(), // Use current name in case it was renamed
+                    from: baseline_col.data_type.clone(),
+                    to: current_col.data_type.clone(),
+                });
+            }
+        }
+
+        Ok(SchemaChanges {
+            column_order,
+            columns_added,
+            columns_removed,
+            columns_renamed,
+            type_changes,
+        })
+    }
+    
+    /// Compute hash for a row (consistent with existing hash computation)
+    /// TODO: Debug why identical data produces different hashes between CSV and Parquet
+    pub fn compute_row_hash(row_values: &[String]) -> String {
+        use blake3;
+        
+        // Debug: Log the actual values being hashed to identify inconsistencies
+        #[cfg(debug_assertions)]
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!("Hashing row values: {:?}", row_values);
+        }
+        
+        let row_content = row_values.join("||"); // Use || to avoid conflicts
+        let hash = blake3::hash(row_content.as_bytes());
+        
+        #[cfg(debug_assertions)]
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!("Row content: '{}' -> hash: {}", row_content, hash.to_hex());
+        }
+        
+        hash.to_hex().to_string()
+    }
+}
 
 /// Comprehensive change detection result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -717,6 +1276,79 @@ mod tests {
         assert_eq!(changes.added.len(), 1);
         assert_eq!(changes.added[0].row_index, 2);
         assert_eq!(changes.removed.len(), 0);
+    }
+
+    #[test]
+    fn test_streaming_hash_set_operations() {
+        // Test basic hash set operations
+        let mut hash_set = RowHashSet::new();
+        
+        // Add some rows
+        hash_set.add_row(0, "hash1".to_string());
+        hash_set.add_row(1, "hash2".to_string());
+        hash_set.add_row(2, "hash3".to_string());
+        
+        // Test contains operations
+        assert!(hash_set.contains_hash("hash1"));
+        assert!(hash_set.contains_hash("hash2"));
+        assert!(!hash_set.contains_hash("nonexistent"));
+        
+        // Test row retrieval
+        assert_eq!(hash_set.get_first_row_by_hash("hash1"), Some(0));
+        assert_eq!(hash_set.get_first_row_by_hash("hash2"), Some(1));
+        assert_eq!(hash_set.get_first_row_by_hash("nonexistent"), None);
+        
+        // Test size
+        assert_eq!(hash_set.len(), 3);
+    }
+
+    #[test]
+    fn test_streaming_changed_rows_identification() {
+        // Create two hash sets representing different dataset states
+        let mut baseline_hashes = RowHashSet::new();
+        baseline_hashes.add_row(0, "unchanged_row".to_string());
+        baseline_hashes.add_row(1, "modified_row_old".to_string());
+        baseline_hashes.add_row(2, "removed_row".to_string());
+        
+        let mut current_hashes = RowHashSet::new();
+        current_hashes.add_row(0, "unchanged_row".to_string());
+        current_hashes.add_row(1, "modified_row_new".to_string());
+        current_hashes.add_row(2, "added_row".to_string());
+        
+        // Identify changes
+        let changed_rows = StreamingChangeDetector::identify_changed_rows(&baseline_hashes, &current_hashes);
+        
+        // Verify results
+        assert_eq!(changed_rows.unchanged_count, 1); // "unchanged_row"
+        assert_eq!(changed_rows.baseline_changed.len(), 2); // "modified_row_old", "removed_row"
+        assert_eq!(changed_rows.current_changed.len(), 2);  // "modified_row_new", "added_row"
+        
+        // Verify specific row indices
+        assert!(changed_rows.baseline_changed.contains(&1)); // modified row in baseline
+        assert!(changed_rows.baseline_changed.contains(&2)); // removed row
+        assert!(changed_rows.current_changed.contains(&1));  // modified row in current
+        assert!(changed_rows.current_changed.contains(&2));  // added row
+    }
+
+    #[test]
+    fn test_streaming_row_hash_computation() {
+        let row1 = vec!["Alice".to_string(), "30".to_string(), "Engineer".to_string()];
+        let row2 = vec!["Bob".to_string(), "25".to_string(), "Designer".to_string()];
+        let row3 = vec!["Alice".to_string(), "30".to_string(), "Engineer".to_string()]; // Same as row1
+        
+        let hash1 = StreamingChangeDetector::compute_row_hash(&row1);
+        let hash2 = StreamingChangeDetector::compute_row_hash(&row2);
+        let hash3 = StreamingChangeDetector::compute_row_hash(&row3);
+        
+        // Same data should produce same hash
+        assert_eq!(hash1, hash3);
+        
+        // Different data should produce different hash
+        assert_ne!(hash1, hash2);
+        
+        // Hashes should be consistent (Blake3 hex strings)
+        assert_eq!(hash1.len(), 64); // Blake3 produces 32-byte hashes = 64 hex chars
+        assert!(hash1.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]

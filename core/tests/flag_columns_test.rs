@@ -38,7 +38,7 @@ fn test_flag_columns_exist_in_parquet_no_baseline() -> Result<()> {
     // Get column names
     let mut stmt = reader_processor.connection.prepare(&describe_sql)?;
     let mut columns = Vec::new();
-    let mut rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map([], |row| {
         let column_name: String = row.get(0)?;
         Ok(column_name)
     })?;
@@ -60,7 +60,7 @@ fn test_flag_columns_exist_in_parquet_no_baseline() -> Result<()> {
     // Check flag values - all should be added=true for first snapshot
     let data_sql = "SELECT __snapbase_removed, __snapbase_added, __snapbase_modified FROM temp_parquet_view".to_string();
     let mut stmt = reader_processor.connection.prepare(&data_sql)?;
-    let mut flag_rows = stmt.query_map([], |row| {
+    let flag_rows = stmt.query_map([], |row| {
         let removed: bool = row.get(0)?;
         let added: bool = row.get(1)?;
         let modified: bool = row.get(2)?;
@@ -144,7 +144,7 @@ fn test_flag_columns_with_baseline_changes() -> Result<()> {
     
     let mut stmt = reader_processor.connection.prepare(&describe_sql)?;
     let mut columns = Vec::new();
-    let mut rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map([], |row| {
         let column_name: String = row.get(0)?;
         Ok(column_name)
     })?;
@@ -161,7 +161,7 @@ fn test_flag_columns_with_baseline_changes() -> Result<()> {
     // Check flag values for expected changes
     let data_sql = "SELECT id, name, age, __snapbase_removed, __snapbase_added, __snapbase_modified FROM temp_parquet_view ORDER BY id".to_string();
     let mut stmt = reader_processor.connection.prepare(&data_sql)?;
-    let mut flag_rows = stmt.query_map([], |row| {
+    let flag_rows = stmt.query_map([], |row| {
         let id: i32 = row.get(0)?;
         let name: String = row.get(1)?;
         let age: i32 = row.get(2)?;

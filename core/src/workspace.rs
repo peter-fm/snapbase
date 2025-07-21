@@ -521,27 +521,27 @@ region = "{}"
                 crate::config::DatabaseType::Sqlite => "sqlite",
             };
             
-            let mut section = format!("\n[databases.{}]\ntype = \"{}\"", name, db_type);
+            let mut section = format!("\n[databases.{name}]\ntype = \"{db_type}\"");
             
             if let Some(ref conn_str) = db_config.connection_string {
-                section.push_str(&format!("\nconnection_string = \"{}\"", conn_str));
+                section.push_str(&format!("\nconnection_string = \"{conn_str}\""));
             } else {
                 if let Some(ref host) = db_config.host {
-                    section.push_str(&format!("\nhost = \"{}\"", host));
+                    section.push_str(&format!("\nhost = \"{host}\""));
                 }
                 if let Some(port) = db_config.port {
-                    section.push_str(&format!("\nport = {}", port));
+                    section.push_str(&format!("\nport = {port}"));
                 }
                 if let Some(ref database) = db_config.database {
-                    section.push_str(&format!("\ndatabase = \"{}\"", database));
+                    section.push_str(&format!("\ndatabase = \"{database}\""));
                 }
                 if let Some(ref username) = db_config.username {
-                    section.push_str(&format!("\nusername = \"{}\"", username));
+                    section.push_str(&format!("\nusername = \"{username}\""));
                 }
             }
             
             if let Some(ref password_env) = db_config.password_env {
-                section.push_str(&format!("\npassword_env = \"{}\"", password_env));
+                section.push_str(&format!("\npassword_env = \"{password_env}\""));
             }
             
             if !db_config.tables.is_empty() {

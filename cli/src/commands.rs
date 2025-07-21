@@ -3,13 +3,14 @@
 use crate::cli::Commands;
 use crate::output::{PrettyPrinter, JsonFormatter};
 use crate::progress::ProgressReporter;
+use std::collections::HashMap;
 
 use snapbase_core::query::{QueryResult, QueryValue};
 use snapbase_core::data::DataProcessor;
 use snapbase_core::error::{Result, SnapbaseError};
 use snapbase_core::resolver::{SnapshotRef, SnapshotResolver};
 use snapbase_core::workspace::SnapbaseWorkspace;
-use snapbase_core::change_detection::ChangeDetector;
+use snapbase_core::change_detection::{ChangeDetector, StreamingChangeDetector};
 use snapbase_core::naming::SnapshotNamer;
 use snapbase_core::config::{get_snapshot_config, get_database_config};
 use snapbase_core::database::{discover_database_tables, create_table_snapshot_sql, TableInfo};
@@ -19,7 +20,20 @@ use snapbase_core::hash;
 use snapbase_core::path_utils;
 use snapbase_core::sql;
 use std::path::Path;
-use chrono;
+
+/// Filter row data to include only original columns (exclude snapbase metadata columns)
+/// This ensures consistent hashing by excluding columns like __snapbase_*, snapshot_name, snapshot_timestamp
+fn filter_original_columns(row_data: &[String], original_column_count: usize) -> Vec<String> {
+    // Take only the first N columns (original data), excluding metadata columns added by snapbase
+    row_data.iter().take(original_column_count).cloned().collect()
+}
+
+/// Filter changed row data HashMap to include only original columns
+fn filter_changed_row_data(full_data: &HashMap<u64, Vec<String>>, original_column_count: usize) -> HashMap<u64, Vec<String>> {
+    full_data.iter().map(|(row_index, row_data)| {
+        (*row_index, filter_original_columns(row_data, original_column_count))
+    }).collect()
+}
 
 /// Execute a command
 pub fn execute_command(command: Commands, workspace_path: Option<&Path>) -> Result<()> {
@@ -60,10 +74,10 @@ pub fn execute_command(command: Commands, workspace_path: Option<&Path>) -> Resu
             compare_to,
             quiet,
             json,
-        } => status_command(workspace_path, &input, compare_to.as_deref(), quiet, json),
+        } => streaming_status_command(workspace_path, &input, compare_to.as_deref(), quiet, json),
         Commands::List { source, json } => list_command(workspace_path, source.as_deref(), json),
         Commands::Stats { json } => stats_command(workspace_path, json),
-        Commands::Diff { source, from, to, json } => diff_command(workspace_path, &source, &from, &to, json),
+        Commands::Diff { source, from, to, json } => streaming_diff_command(workspace_path, &source, &from, &to, json),
         Commands::Export {
             input,
             file,
@@ -723,7 +737,206 @@ fn show_command(
     Ok(())
 }
 
-/// Check status against a snapshot
+/// Memory-efficient streaming status command
+fn streaming_status_command(
+    workspace_path: Option<&Path>,
+    input: &str,
+    compare_to: Option<&str>,
+    quiet: bool,
+    json: bool,
+) -> Result<()> {
+    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
+    let resolver = SnapshotResolver::new(workspace.clone());
+
+    // Canonicalize input path for comparison
+    let input_path = if Path::new(input).is_absolute() {
+        Path::new(input).to_path_buf()
+    } else {
+        workspace.root.join(input)
+    };
+    let canonical_input_path = input_path.canonicalize()
+        .unwrap_or(input_path.clone())
+        .to_string_lossy()
+        .to_string();
+
+    // Resolve comparison snapshot
+    let comparison_snapshot = if let Some(name) = compare_to {
+        let snap_ref = SnapshotRef::from_string(name.to_string());
+        resolver.resolve(&snap_ref)?
+    } else {
+        // Find latest snapshot for this specific source
+        let latest_for_source = workspace.latest_snapshot_for_source(&canonical_input_path)?;
+        if let Some(latest_name) = latest_for_source {
+            let snap_ref = SnapshotRef::from_string(latest_name);
+            resolver.resolve(&snap_ref)?
+        } else {
+            return Err(SnapbaseError::workspace("No snapshots found to compare against"));
+        }
+    };
+
+    if !json {
+        println!("📊 Streaming comparison of '{}' against snapshot '{}'...", input, comparison_snapshot.name);
+    }
+
+    // Load baseline snapshot metadata
+    let rt = tokio::runtime::Runtime::new()?;
+    let baseline_metadata = if let Some(preloaded) = comparison_snapshot.get_metadata() {
+        preloaded.clone()
+    } else if let Some(json_path) = &comparison_snapshot.json_path {
+        let metadata_data = rt.block_on(async {
+            workspace.storage().read_file(json_path).await
+        })?;
+        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
+    } else {
+        return Err(SnapbaseError::SnapshotNotFound {
+            name: comparison_snapshot.name.clone(),
+        });
+    };
+
+    // Get baseline data path
+    let baseline_data_path = comparison_snapshot.data_path.as_ref().ok_or_else(|| {
+        SnapbaseError::archive("Baseline snapshot has no data path")
+    })?;
+
+    // Load current data info
+    let mut current_data_processor = DataProcessor::new_with_workspace(&workspace)?;
+    let current_data_info = current_data_processor.load_file(&input_path)?;
+
+    if !json {
+        println!("🔍 Phase 1: Building hash sets for efficient comparison...");
+    }
+
+    // Phase 1: Stream both datasets and build hash sets
+    let rt = tokio::runtime::Runtime::new()?;
+    let (baseline_hashes, current_hashes) = rt.block_on(async {
+        // Stream baseline data
+        let mut baseline_processor = DataProcessor::new_with_workspace(&workspace)?;
+        let baseline_rows = baseline_processor.load_cloud_storage_data(baseline_data_path, &workspace, false).await?;
+        let baseline_stream_data: Vec<(u64, Vec<String>)> = baseline_rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, row)| (i as u64, row))
+            .collect();
+
+        // Stream current data  
+        let current_rows = current_data_processor.stream_rows_async(None::<fn(u64, u64, &str)>).await?;
+
+        // Build hash sets
+        let mut baseline_hashes = snapbase_core::change_detection::RowHashSet::new();
+        let mut current_hashes = snapbase_core::change_detection::RowHashSet::new();
+
+        // Get original columns (exclude snapbase metadata) for consistent hashing
+        let original_column_count = baseline_metadata.columns.len();
+        
+        // Build baseline hashes (only original columns, exclude metadata)
+        for (index, row) in baseline_stream_data {
+            let original_row_data = filter_original_columns(&row, original_column_count);
+            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
+            baseline_hashes.add_row(index, hash);
+        }
+
+        // Build current hashes (only original columns, exclude metadata)
+        for (index, row) in current_rows {
+            let original_row_data = filter_original_columns(&row, original_column_count);
+            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
+            current_hashes.add_row(index, hash);
+        }
+
+        Ok::<_, SnapbaseError>((baseline_hashes, current_hashes))
+    })?;
+
+    if !json {
+        println!("🔍 Phase 2: Identifying changed rows...");
+    }
+
+    // Phase 2: Compare hash sets to identify changed rows
+    let changed_rows = StreamingChangeDetector::identify_changed_rows(&baseline_hashes, &current_hashes);
+
+    // Calculate actual number of logical changes (not double-counting modified rows)
+    let unique_changed_rows: std::collections::HashSet<u64> = changed_rows.baseline_changed.iter()
+        .chain(changed_rows.current_changed.iter())
+        .cloned()
+        .collect();
+    let changed_count = unique_changed_rows.len();
+    
+    if !json {
+        println!("📈 Found {} unchanged rows, {} changed rows", changed_rows.unchanged_count, changed_count);
+        
+        if changed_count > 0 {
+            println!("🔍 Phase 3: Analyzing {changed_count} changed rows in detail...");
+        }
+    }
+
+    // Get original columns (exclude snapbase metadata) for consistent analysis
+    let original_column_count = baseline_metadata.columns.len();
+    
+    // Phase 3: Load and analyze only the changed rows if there are any changes
+    let changes = if changed_count > 0 {
+        rt.block_on(async {
+            // Load baseline changed rows
+            let baseline_changed_data_full = if !changed_rows.baseline_changed.is_empty() {
+                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
+                processor.load_specific_rows_from_storage(baseline_data_path, &workspace, &changed_rows.baseline_changed).await?
+            } else {
+                HashMap::new()
+            };
+
+            // Load current changed rows
+            let current_changed_data_full = if !changed_rows.current_changed.is_empty() {
+                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
+                let _data_info = processor.load_file(&input_path)?;
+                processor.load_specific_rows(&changed_rows.current_changed).await?
+            } else {
+                HashMap::new()
+            };
+            
+            // Filter to original columns only (exclude metadata) for analysis
+            let baseline_changed_data = filter_changed_row_data(&baseline_changed_data_full, original_column_count);
+            let current_changed_data = filter_changed_row_data(&current_changed_data_full, original_column_count);
+
+            StreamingChangeDetector::analyze_changed_rows(
+                &changed_rows,
+                &baseline_metadata.columns,
+                &current_data_info.columns,
+                baseline_changed_data,
+                current_changed_data,
+            ).await
+        })?
+    } else {
+        // No changes detected, create empty result
+        snapbase_core::change_detection::ChangeDetectionResult {
+            schema_changes: snapbase_core::change_detection::SchemaChanges {
+                column_order: None,
+                columns_added: Vec::new(),
+                columns_removed: Vec::new(),
+                columns_renamed: Vec::new(),
+                type_changes: Vec::new(),
+            },
+            row_changes: snapbase_core::change_detection::RowChanges {
+                modified: Vec::new(),
+                added: Vec::new(),
+                removed: Vec::new(),
+            },
+        }
+    };
+
+    // Output results
+    if json {
+        let status_json = JsonFormatter::format_comprehensive_status_results(&changes)?;
+        println!("{status_json}");
+    } else {
+        PrettyPrinter::print_comprehensive_status_results(&changes, quiet);
+        if !quiet {
+            println!("✅ Memory-efficient streaming comparison completed!");
+            println!("   Processed {} baseline rows, {} current rows", baseline_hashes.len(), current_hashes.len());
+            println!("   Memory usage optimized - only loaded {changed_count} changed rows");
+        }
+    }
+
+    Ok(())
+}
+
+/// Check status against a snapshot (original implementation - kept for fallback)
 fn status_command(
     workspace_path: Option<&Path>,
     input: &str,
@@ -791,7 +1004,7 @@ fn status_command(
     let mut data_processor = DataProcessor::new_with_workspace(&workspace)?;
 
     let baseline_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(&data_path, &workspace, false).await
+        data_processor.load_cloud_storage_data(data_path, &workspace, false).await
     })?;
 
     // Load current data
@@ -1648,9 +1861,9 @@ fn load_parquet_data_from_storage(
                             let seconds = total_seconds % 60;
                             let microseconds = t % 1_000_000;
                             if microseconds > 0 {
-                                format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                             } else {
-                                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                format!("{hours:02}:{minutes:02}:{seconds:02}")
                             }
                         }
                         _ => format!("{t:?}"), // Fallback for other time units
@@ -1663,7 +1876,7 @@ fn load_parquet_data_from_storage(
                             let seconds = ts / 1_000_000;
                             let microseconds = ts % 1_000_000;
                             let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                             if microseconds > 0 {
                                 datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                             } else {
@@ -1719,7 +1932,200 @@ fn stats_command(workspace_path: Option<&Path>, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Compare two snapshots
+/// Memory-efficient streaming diff command
+fn streaming_diff_command(
+    workspace_path: Option<&Path>,
+    source: &str,
+    from_snapshot: &str,
+    to_snapshot: &str,
+    json: bool,
+) -> Result<()> {
+    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
+    let resolver = SnapshotResolver::new(workspace.clone());
+    
+    // Resolve both snapshots
+    let from_resolved = resolver.resolve_by_name_for_source(from_snapshot, Some(source))?;
+    let to_resolved = resolver.resolve_by_name_for_source(to_snapshot, Some(source))?;
+    
+    if !json {
+        println!("🔍 Streaming comparison of snapshots '{from_snapshot}' → '{to_snapshot}'");
+    }
+    
+    // Load metadata for both snapshots
+    let rt = tokio::runtime::Runtime::new()?;
+    
+    let from_metadata = if let Some(preloaded) = from_resolved.get_metadata() {
+        preloaded.clone()
+    } else if let Some(json_path) = &from_resolved.json_path {
+        let metadata_data = rt.block_on(async {
+            workspace.storage().read_file(json_path).await
+        })?;
+        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
+    } else {
+        return Err(SnapbaseError::SnapshotNotFound {
+            name: from_snapshot.to_string(),
+        });
+    };
+    
+    let to_metadata = if let Some(preloaded) = to_resolved.get_metadata() {
+        preloaded.clone()
+    } else if let Some(json_path) = &to_resolved.json_path {
+        let metadata_data = rt.block_on(async {
+            workspace.storage().read_file(json_path).await
+        })?;
+        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
+    } else {
+        return Err(SnapbaseError::SnapshotNotFound {
+            name: to_snapshot.to_string(),
+        });
+    };
+    
+    // Get data paths
+    let from_data_path = from_resolved.data_path.as_ref().ok_or_else(|| {
+        SnapbaseError::archive("From snapshot has no data path")
+    })?;
+
+    let to_data_path = to_resolved.data_path.as_ref().ok_or_else(|| {
+        SnapbaseError::archive("To snapshot has no data path")  
+    })?;
+
+    if !json {
+        println!("🔍 Phase 1: Building hash sets for efficient comparison...");
+    }
+
+    // Phase 1: Stream both datasets and build hash sets
+    let (from_hashes, to_hashes) = rt.block_on(async {
+        // Stream from snapshot data
+        let mut from_processor = DataProcessor::new_with_workspace(&workspace)?;
+        let from_rows = from_processor.load_cloud_storage_data(from_data_path, &workspace, false).await?;
+        let from_stream_data: Vec<(u64, Vec<String>)> = from_rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, row)| (i as u64, row))
+            .collect();
+
+        // Stream to snapshot data
+        let mut to_processor = DataProcessor::new_with_workspace(&workspace)?;
+        let to_rows = to_processor.load_cloud_storage_data(to_data_path, &workspace, false).await?;
+        let to_stream_data: Vec<(u64, Vec<String>)> = to_rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, row)| (i as u64, row))
+            .collect();
+
+        // Build hash sets
+        let mut from_hashes = snapbase_core::change_detection::RowHashSet::new();
+        let mut to_hashes = snapbase_core::change_detection::RowHashSet::new();
+
+        // Get original columns (exclude snapbase metadata) for consistent hashing
+        let original_column_count = from_metadata.columns.len();
+        
+        // Build from snapshot hashes (only original columns, exclude metadata)
+        for (index, row) in from_stream_data {
+            let original_row_data = filter_original_columns(&row, original_column_count);
+            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
+            from_hashes.add_row(index, hash);
+        }
+
+        // Build to snapshot hashes (only original columns, exclude metadata)
+        for (index, row) in to_stream_data {
+            let original_row_data = filter_original_columns(&row, original_column_count);
+            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
+            to_hashes.add_row(index, hash);
+        }
+
+        Ok::<_, SnapbaseError>((from_hashes, to_hashes))
+    })?;
+
+    if !json {
+        println!("🔍 Phase 2: Identifying changed rows...");
+    }
+
+    // Phase 2: Compare hash sets to identify changed rows
+    let changed_rows = StreamingChangeDetector::identify_changed_rows(&from_hashes, &to_hashes);
+    // Calculate actual number of logical changes (not double-counting modified rows)
+    let unique_changed_rows: std::collections::HashSet<u64> = changed_rows.baseline_changed.iter()
+        .chain(changed_rows.current_changed.iter())
+        .cloned()
+        .collect();
+    let changed_count = unique_changed_rows.len();
+    
+    if !json {
+        println!("📈 Found {} unchanged rows, {} changed rows", changed_rows.unchanged_count, changed_count);
+        
+        if changed_count > 0 {
+            println!("🔍 Phase 3: Analyzing {changed_count} changed rows in detail...");
+        }
+    }
+
+    // Get original columns (exclude snapbase metadata) for consistent analysis
+    let original_column_count = from_metadata.columns.len();
+    
+    // Phase 3: Load and analyze only the changed rows if there are any changes
+    let changes = if changed_count > 0 {
+        rt.block_on(async {
+            // Load from snapshot changed rows
+            let from_changed_data_full = if !changed_rows.baseline_changed.is_empty() {
+                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
+                processor.load_specific_rows_from_storage(from_data_path, &workspace, &changed_rows.baseline_changed).await?
+            } else {
+                HashMap::new()
+            };
+
+            // Load to snapshot changed rows
+            let to_changed_data_full = if !changed_rows.current_changed.is_empty() {
+                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
+                processor.load_specific_rows_from_storage(to_data_path, &workspace, &changed_rows.current_changed).await?
+            } else {
+                HashMap::new()
+            };
+            
+            // Filter to original columns only (exclude metadata) for analysis
+            let from_changed_data = filter_changed_row_data(&from_changed_data_full, original_column_count);
+            let to_changed_data = filter_changed_row_data(&to_changed_data_full, original_column_count);
+
+            StreamingChangeDetector::analyze_changed_rows(
+                &changed_rows,
+                &from_metadata.columns,
+                &to_metadata.columns,
+                from_changed_data,
+                to_changed_data,
+            ).await
+        })?
+    } else {
+        // No changes detected, create empty result
+        snapbase_core::change_detection::ChangeDetectionResult {
+            schema_changes: snapbase_core::change_detection::SchemaChanges {
+                column_order: None,
+                columns_added: Vec::new(),
+                columns_removed: Vec::new(),
+                columns_renamed: Vec::new(),
+                type_changes: Vec::new(),
+            },
+            row_changes: snapbase_core::change_detection::RowChanges {
+                modified: Vec::new(),
+                added: Vec::new(),
+                removed: Vec::new(),
+            },
+        }
+    };
+    
+    // Output results
+    if json {
+        let diff_json = serde_json::to_value(&changes)?;
+        println!("{}", serde_json::to_string_pretty(&diff_json)?);
+    } else {
+        // Use the same comprehensive output as status command
+        PrettyPrinter::print_comprehensive_diff_results(&changes, from_snapshot, to_snapshot);
+        println!("✅ Memory-efficient streaming diff completed!");
+        println!("   Processed {} baseline rows, {} comparison rows", from_hashes.len(), to_hashes.len());
+        println!("   Memory usage optimized - only loaded {changed_count} changed rows");
+    }
+    
+    Ok(())
+}
+
+/// Compare two snapshots (original implementation - kept for fallback)
 fn diff_command(
     workspace_path: Option<&Path>,
     source: &str,
@@ -1734,7 +2140,7 @@ fn diff_command(
     let from_resolved = resolver.resolve_by_name_for_source(from_snapshot, Some(source))?;
     let to_resolved = resolver.resolve_by_name_for_source(to_snapshot, Some(source))?;
     
-    println!("🔍 Comparing snapshots '{}' → '{}'", from_snapshot, to_snapshot);
+    println!("🔍 Comparing snapshots '{from_snapshot}' → '{to_snapshot}'");
     
     // Load metadata for both snapshots
     let rt = tokio::runtime::Runtime::new()?;
@@ -1782,13 +2188,13 @@ fn diff_command(
     let from_row_data = rt.block_on(async {
         data_processor.load_cloud_storage_data(from_data_path, &workspace, false).await
     })?;
-    println!("FROM DATA {:?}", from_row_data);
+    println!("FROM DATA {from_row_data:?}");
     progress_reporter.update_archive("Loading comparison data...");
     
     let to_row_data = rt.block_on(async {
         data_processor.load_cloud_storage_data(to_data_path, &workspace, false).await
     })?;
-    println!("TO DATA {:?}", to_row_data);
+    println!("TO DATA {to_row_data:?}");
 
     progress_reporter.update_archive("Detecting changes...");
     

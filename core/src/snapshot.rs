@@ -464,9 +464,9 @@ impl SnapshotCreator {
                                 let seconds = total_seconds % 60;
                                 let microseconds = t % 1_000_000;
                                 if microseconds > 0 {
-                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                                 } else {
-                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                                 }
                             }
                             _ => format!("{t:?}"), // Fallback for other time units
@@ -479,7 +479,7 @@ impl SnapshotCreator {
                                 let seconds = ts / 1_000_000;
                                 let microseconds = ts % 1_000_000;
                                 let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                                 if microseconds > 0 {
                                     datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                                 } else {

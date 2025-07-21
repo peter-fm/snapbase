@@ -87,10 +87,10 @@ impl DataProcessor {
     /// Get database-specific identifier quoting
     fn quote_identifier(&self, identifier: &str) -> String {
         match &self.database_type {
-            Some(DatabaseType::MySQL) => format!("`{}`", identifier),
-            Some(DatabaseType::PostgreSQL) => format!("\"{}\"", identifier),
-            Some(DatabaseType::SQLite) => format!("\"{}\"", identifier),
-            Some(DatabaseType::DuckDB) | None => format!("\"{}\"", identifier),
+            Some(DatabaseType::MySQL) => format!("`{identifier}`"),
+            Some(DatabaseType::PostgreSQL) => format!("\"{identifier}\""),
+            Some(DatabaseType::SQLite) => format!("\"{identifier}\""),
+            Some(DatabaseType::DuckDB) | None => format!("\"{identifier}\""),
         }
     }
 
@@ -518,9 +518,9 @@ impl DataProcessor {
                                 let seconds = total_seconds % 60;
                                 let microseconds = t % 1_000_000;
                                 if microseconds > 0 {
-                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                                 } else {
-                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                                 }
                             }
                             _ => format!("{t:?}"), // Fallback for other time units
@@ -533,7 +533,7 @@ impl DataProcessor {
                                 let seconds = ts / 1_000_000;
                                 let microseconds = ts % 1_000_000;
                                 let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                                 if microseconds > 0 {
                                     datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                                 } else {
@@ -640,9 +640,9 @@ impl DataProcessor {
                                 let seconds = total_seconds % 60;
                                 let microseconds = t % 1_000_000;
                                 if microseconds > 0 {
-                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                                 } else {
-                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                                 }
                             }
                             _ => format!("{t:?}"), // Fallback for other time units
@@ -655,7 +655,7 @@ impl DataProcessor {
                                 let seconds = ts / 1_000_000;
                                 let microseconds = ts % 1_000_000;
                                 let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                                 if microseconds > 0 {
                                     datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                                 } else {
@@ -992,9 +992,9 @@ impl DataProcessor {
                                 let seconds = total_seconds % 60;
                                 let microseconds = t % 1_000_000;
                                 if microseconds > 0 {
-                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                                 } else {
-                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                                 }
                             }
                             _ => format!("{t:?}"), // Fallback for other time units
@@ -1007,7 +1007,7 @@ impl DataProcessor {
                                 let seconds = ts / 1_000_000;
                                 let microseconds = ts % 1_000_000;
                                 let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                                 if microseconds > 0 {
                                     datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                                 } else {
@@ -1076,9 +1076,9 @@ impl DataProcessor {
                                 let seconds = total_seconds % 60;
                                 let microseconds = t % 1_000_000;
                                 if microseconds > 0 {
-                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                                 } else {
-                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                                 }
                             }
                             _ => format!("{t:?}"), // Fallback for other time units
@@ -1091,7 +1091,7 @@ impl DataProcessor {
                                 let seconds = ts / 1_000_000;
                                 let microseconds = ts % 1_000_000;
                                 let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                                 if microseconds > 0 {
                                     datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                                 } else {
@@ -1180,9 +1180,9 @@ impl DataProcessor {
                                 let seconds = total_seconds % 60;
                                 let microseconds = t % 1_000_000;
                                 if microseconds > 0 {
-                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                                 } else {
-                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                                 }
                             }
                             _ => format!("{t:?}"), // Fallback for other time units
@@ -1195,7 +1195,7 @@ impl DataProcessor {
                                 let seconds = ts / 1_000_000;
                                 let microseconds = ts % 1_000_000;
                                 let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                                 if microseconds > 0 {
                                     datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                                 } else {
@@ -1450,9 +1450,9 @@ impl DataProcessor {
                             let seconds = total_seconds % 60;
                             let microseconds = t % 1_000_000;
                             if microseconds > 0 {
-                                format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                             } else {
-                                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                format!("{hours:02}:{minutes:02}:{seconds:02}")
                             }
                         }
                         _ => format!("{t:?}"), // Fallback for other time units
@@ -1465,7 +1465,7 @@ impl DataProcessor {
                             let seconds = ts / 1_000_000;
                             let microseconds = ts % 1_000_000;
                             let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                             if microseconds > 0 {
                                 datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                             } else {
@@ -1624,9 +1624,9 @@ impl DataProcessor {
                                 let seconds = total_seconds % 60;
                                 let microseconds = t % 1_000_000;
                                 if microseconds > 0 {
-                                    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, microseconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
                                 } else {
-                                    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                                 }
                             }
                             _ => format!("{t:?}"), // Fallback for other time units
@@ -1639,7 +1639,7 @@ impl DataProcessor {
                                 let seconds = ts / 1_000_000;
                                 let microseconds = ts % 1_000_000;
                                 let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                    .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
                                 if microseconds > 0 {
                                     datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
                                 } else {
@@ -1667,6 +1667,400 @@ impl DataProcessor {
 
 
         Ok(all_rows)
+    }
+
+    /// Stream rows for memory-efficient change detection
+    /// Returns an async stream of (row_index, row_data) pairs
+    pub async fn stream_rows_async<F>(
+        &mut self,
+        progress_callback: Option<F>
+    ) -> Result<Vec<(u64, Vec<String>)>>
+    where 
+        F: Fn(u64, u64, &str)
+    {
+        let columns = self.get_column_info()?;
+        let column_count = columns.len();
+        
+        if column_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Get total row count for progress reporting
+        let total_rows = if let Some(ref query) = self.streaming_query.clone() {
+            let count_query = format!("SELECT COUNT(*) FROM ({query})");
+            self.connection
+                .prepare(&count_query)?
+                .query_row([], |row| row.get(0))?
+        } else {
+            self.connection
+                .prepare("SELECT COUNT(*) FROM data_view")?
+                .query_row([], |row| row.get(0))?
+        };
+
+        if total_rows == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut all_rows = Vec::new();
+        let mut processed_rows = 0u64;
+
+        // Stream rows using the same logic as extract_data_chunked_with_progress
+        if let Some(ref query) = self.streaming_query.clone() {
+            // Stream SQL query results
+            let mut stmt = self.connection.prepare(query)?;
+            let rows = stmt.query_map([], |row| {
+                self.extract_row_values_for_streaming(row, &columns)
+            })?;
+            
+            for row_result in rows {
+                let row_values = row_result?;
+                all_rows.push((processed_rows, row_values));
+                processed_rows += 1;
+                
+                if processed_rows % 50000 == 0 {
+                    if let Some(ref callback) = progress_callback {
+                        callback(processed_rows, total_rows, "Streaming rows...");
+                    }
+                }
+            }
+        } else {
+            // Stream from data_view for regular files
+            let mut stmt = self.connection.prepare("SELECT * FROM data_view")?;
+            let rows = stmt.query_map([], |row| {
+                self.extract_row_values_for_streaming(row, &columns)
+            })?;
+            
+            for row_result in rows {
+                let row_values = row_result?;
+                all_rows.push((processed_rows, row_values));
+                processed_rows += 1;
+                
+                if processed_rows % 50000 == 0 {
+                    if let Some(ref callback) = progress_callback {
+                        callback(processed_rows, total_rows, "Streaming rows...");
+                    }
+                }
+            }
+        }
+        
+        if let Some(ref callback) = progress_callback {
+            callback(processed_rows, total_rows, "Streaming completed");
+        }
+        
+        Ok(all_rows)
+    }
+    
+    /// Load specific rows by indices (for Phase 3 of streaming change detection)
+    /// This only loads the rows that have been identified as changed
+    pub async fn load_specific_rows(
+        &mut self,
+        row_indices: &[u64]
+    ) -> Result<HashMap<u64, Vec<String>>> {
+        if row_indices.is_empty() {
+            return Ok(HashMap::new());
+        }
+        
+        let columns = self.get_column_info()?;
+        let column_count = columns.len();
+        
+        if column_count == 0 {
+            return Ok(HashMap::new());
+        }
+        
+        let mut result = HashMap::new();
+        
+        // Create a temporary table with row numbers for efficient lookups
+        // This is more efficient than multiple individual queries
+        let indices_list = row_indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        
+        // Create a temporary table with row numbers to avoid window functions in WHERE clause
+        let temp_table = "temp_indexed_data";
+        self.connection.execute(&format!("DROP TABLE IF EXISTS {}", temp_table), [])?;
+        
+        let create_temp_query = if let Some(ref streaming_query) = self.streaming_query.clone() {
+            format!(
+                "CREATE TABLE {} AS 
+                 SELECT ROW_NUMBER() OVER () - 1 as row_num, * FROM ({})",
+                temp_table, streaming_query
+            )
+        } else {
+            format!(
+                "CREATE TABLE {} AS 
+                 SELECT ROW_NUMBER() OVER () - 1 as row_num, * FROM data_view",
+                temp_table
+            )
+        };
+        
+        self.connection.execute(&create_temp_query, [])?;
+        
+        // Now we can use a simple WHERE clause on the temp table
+        let query = format!(
+            "SELECT row_num, * FROM {} WHERE row_num IN ({})",
+            temp_table, indices_list
+        );
+        
+        let mut stmt = self.connection.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            // First column is row_num, rest are the actual data
+            let row_num: u64 = row.get(0)?;
+            let mut row_values = Vec::with_capacity(column_count);
+            
+            for i in 1..=column_count { // Skip first column (row_num)
+                let value: String = match row.get_ref(i)? {
+                    duckdb::types::ValueRef::Null => String::new(),
+                    duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                    duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Int(i) => i.to_string(),
+                    duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Float(f) => f.to_string(),
+                    duckdb::types::ValueRef::Double(f) => f.to_string(),
+                    duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                    duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                    duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                    duckdb::types::ValueRef::Date32(d) => {
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                    duckdb::types::ValueRef::Time64(unit, t) => {
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
+                                } else {
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
+                                }
+                            }
+                            _ => format!("{t:?}"),
+                        }
+                    },
+                    duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"),
+                        }
+                    },
+                    _ => "<unknown>".to_string(),
+                };
+                row_values.push(value);
+            }
+            
+            Ok((row_num, row_values))
+        })?;
+        
+        for row_result in rows {
+            let (row_num, row_values) = row_result?;
+            result.insert(row_num, row_values);
+        }
+        
+        // Clean up temp table
+        self.connection.execute(&format!("DROP TABLE IF EXISTS {}", temp_table), [])?;
+        
+        Ok(result)
+    }
+    
+    /// Load specific rows from cloud storage (Parquet files) by indices
+    pub async fn load_specific_rows_from_storage(
+        &mut self,
+        data_path: &str,
+        workspace: &crate::workspace::SnapbaseWorkspace,
+        row_indices: &[u64]
+    ) -> Result<HashMap<u64, Vec<String>>> {
+        if row_indices.is_empty() {
+            return Ok(HashMap::new());
+        }
+        
+        // Convert storage path to DuckDB-compatible path
+        let duckdb_path = workspace.storage().get_duckdb_path(data_path);
+        
+        // Create comma-separated list of indices
+        let indices_list = row_indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        
+        // Create a temporary table with row numbers to avoid window functions in WHERE clause
+        let temp_table = "temp_parquet_indexed_data";
+        self.connection.execute(&format!("DROP TABLE IF EXISTS {}", temp_table), [])?;
+        
+        let create_temp_query = format!(
+            "CREATE TABLE {} AS 
+             SELECT ROW_NUMBER() OVER () - 1 as row_num, * FROM read_parquet('{}')",
+            temp_table, duckdb_path
+        );
+        
+        self.connection.execute(&create_temp_query, [])?;
+        
+        // Now we can use a simple WHERE clause on the temp table
+        let query = format!(
+            "SELECT row_num, * FROM {} WHERE row_num IN ({})",
+            temp_table, indices_list
+        );
+        
+        let mut stmt = self.connection.prepare(&query)?;
+        let mut result = HashMap::new();
+        
+        let rows = stmt.query_map([], |row| {
+            let row_num: u64 = row.get(0)?;
+            let column_count = row.as_ref().column_count() - 1; // Subtract 1 for row_num column
+            let mut string_row = Vec::with_capacity(column_count);
+            
+            for i in 1..=column_count {
+                let value: String = match row.get_ref(i)? {
+                    duckdb::types::ValueRef::Null => String::new(),
+                    duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
+                    duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Int(i) => i.to_string(),
+                    duckdb::types::ValueRef::BigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
+                    duckdb::types::ValueRef::Float(f) => f.to_string(),
+                    duckdb::types::ValueRef::Double(f) => f.to_string(),
+                    duckdb::types::ValueRef::Decimal(d) => d.to_string(),
+                    duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
+                    duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                    duckdb::types::ValueRef::Date32(d) => {
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                        let date = epoch + chrono::Duration::days(d as i64);
+                        date.format("%Y-%m-%d").to_string()
+                    },
+                    duckdb::types::ValueRef::Time64(unit, t) => {
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let total_seconds = t / 1_000_000;
+                                let hours = total_seconds / 3600;
+                                let minutes = (total_seconds % 3600) / 60;
+                                let seconds = total_seconds % 60;
+                                let microseconds = t % 1_000_000;
+                                if microseconds > 0 {
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
+                                } else {
+                                    format!("{hours:02}:{minutes:02}:{seconds:02}")
+                                }
+                            }
+                            _ => format!("{t:?}"),
+                        }
+                    },
+                    duckdb::types::ValueRef::Timestamp(unit, ts) => {
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                let seconds = ts / 1_000_000;
+                                let microseconds = ts % 1_000_000;
+                                let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                    .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            }
+                            _ => format!("{ts:?}"),
+                        }
+                    },
+                    _ => "<unknown>".to_string(),
+                };
+                string_row.push(value);
+            }
+            Ok((row_num, string_row))
+        })?;
+        
+        for row_result in rows {
+            let (row_num, string_row) = row_result?;
+            result.insert(row_num, string_row);
+        }
+        
+        // Clean up temp table
+        self.connection.execute(&format!("DROP TABLE IF EXISTS {}", temp_table), [])?;
+        
+        Ok(result)
+    }
+    
+    /// Helper method to extract row values for streaming (reused logic)
+    fn extract_row_values_for_streaming(&self, row: &duckdb::Row, columns: &[ColumnInfo]) -> duckdb::Result<Vec<String>> {
+        let mut row_values = Vec::new();
+        for i in 0..columns.len() {
+            let value: String = match row.get_ref(i) {
+                Ok(duckdb::types::ValueRef::Null) => String::new(),
+                Ok(duckdb::types::ValueRef::Boolean(b)) => if b { "true".to_string() } else { "false".to_string() },
+                Ok(duckdb::types::ValueRef::TinyInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::SmallInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::Int(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::BigInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::HugeInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::UTinyInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::USmallInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::UInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::UBigInt(i)) => i.to_string(),
+                Ok(duckdb::types::ValueRef::Float(f)) => f.to_string(),
+                Ok(duckdb::types::ValueRef::Double(f)) => f.to_string(),
+                Ok(duckdb::types::ValueRef::Decimal(d)) => d.to_string(),
+                Ok(duckdb::types::ValueRef::Text(s)) => String::from_utf8_lossy(s).to_string(),
+                Ok(duckdb::types::ValueRef::Blob(b)) => format!("<blob:{} bytes>", b.len()),
+                Ok(duckdb::types::ValueRef::Date32(d)) => {
+                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    let date = epoch + chrono::Duration::days(d as i64);
+                    date.format("%Y-%m-%d").to_string()
+                },
+                Ok(duckdb::types::ValueRef::Time64(unit, t)) => {
+                    match unit {
+                        duckdb::types::TimeUnit::Microsecond => {
+                            let total_seconds = t / 1_000_000;
+                            let hours = total_seconds / 3600;
+                            let minutes = (total_seconds % 3600) / 60;
+                            let seconds = total_seconds % 60;
+                            let microseconds = t % 1_000_000;
+                            if microseconds > 0 {
+                                format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
+                            } else {
+                                format!("{hours:02}:{minutes:02}:{seconds:02}")
+                            }
+                        }
+                        _ => format!("{t:?}"),
+                    }
+                },
+                Ok(duckdb::types::ValueRef::Timestamp(unit, ts)) => {
+                    match unit {
+                        duckdb::types::TimeUnit::Microsecond => {
+                            let seconds = ts / 1_000_000;
+                            let microseconds = ts % 1_000_000;
+                            let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
+                                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+                            if microseconds > 0 {
+                                datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                            } else {
+                                datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                            }
+                        }
+                        _ => format!("{ts:?}"),
+                    }
+                },
+                _ => String::new(),
+            };
+            row_values.push(value);
+        }
+        Ok(row_values)
     }
 
     /// Check if file format is supported

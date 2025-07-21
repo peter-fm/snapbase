@@ -151,7 +151,34 @@ impl PrettyPrinter {
         }
     }
 
-    /// Print comprehensive change detection results
+    /// Print comprehensive change detection results for diff command
+    pub fn print_comprehensive_diff_results(
+        changes: &ChangeDetectionResult,
+        from_snapshot: &str,
+        to_snapshot: &str,
+    ) {
+        println!("🔍 Diff Results: {} → {}", from_snapshot, to_snapshot);
+        
+        // Print schema changes
+        if changes.schema_changes.has_changes() {
+            println!("├─ ❌ Schema: CHANGED");
+            Self::print_schema_changes(&changes.schema_changes, "│  ");
+        } else {
+            println!("├─ ✅ Schema: unchanged");
+        }
+        
+        // Print row changes
+        if changes.row_changes.has_changes() {
+            println!("├─ ❌ Rows: {} changed", changes.row_changes.total_changes());
+            Self::print_row_changes(&changes.row_changes, "│  ");
+        } else {
+            println!("├─ ✅ Rows: unchanged");
+        }
+        
+        println!("└─ Total rows: {}", changes.row_changes.total_changes());
+    }
+
+    /// Print comprehensive change detection results for status command  
     pub fn print_comprehensive_status_results(
         changes: &ChangeDetectionResult,
         quiet: bool,
