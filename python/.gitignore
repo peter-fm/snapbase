@@ -116,10 +116,8 @@ Cargo.lock
 src/snapbase/_core.*.so
 src/snapbase/_core.pyi
 
-# UV lock file (keep this)
-# uv.lock
 
-/logs
+logs/*
 
 # Ignore compressed snapshot archives
 .snapbase

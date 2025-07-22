@@ -16,11 +16,6 @@ fn test_metadata_column_filtering() -> Result<()> {
             nullable: true,
         },
         ColumnInfo {
-            name: "__snapbase_removed".to_string(),
-            data_type: "BOOLEAN".to_string(),
-            nullable: false,
-        },
-        ColumnInfo {
             name: "__snapbase_added".to_string(),
             data_type: "BOOLEAN".to_string(),
             nullable: false,
@@ -73,7 +68,7 @@ fn test_metadata_column_filtering() -> Result<()> {
         })
         .collect();
     
-    assert_eq!(metadata_columns.len(), 5, "Should have 5 metadata columns");
+    assert_eq!(metadata_columns.len(), 4, "Should have 4 metadata columns");
     
     println!("✅ Metadata column filtering test passed");
     Ok(())

@@ -218,7 +218,7 @@ fn export_command(
         } else {
             workspace.root.join(".snapbase").join(data_path).to_string_lossy().to_string()
         };
-        data_processor.load_cloud_storage_data(&absolute_data_path, &workspace, true).await
+        data_processor.load_cloud_storage_data(&absolute_data_path, &workspace).await
     })?;
     
     // Determine output format from file extension
@@ -811,7 +811,7 @@ fn streaming_status_command(
     let (baseline_hashes, current_hashes) = rt.block_on(async {
         // Stream baseline data
         let mut baseline_processor = DataProcessor::new_with_workspace(&workspace)?;
-        let baseline_rows = baseline_processor.load_cloud_storage_data(baseline_data_path, &workspace, false).await?;
+        let baseline_rows = baseline_processor.load_cloud_storage_data(baseline_data_path, &workspace).await?;
         let baseline_stream_data: Vec<(u64, Vec<String>)> = baseline_rows
             .into_iter()
             .enumerate()
@@ -1004,7 +1004,7 @@ fn status_command(
     let mut data_processor = DataProcessor::new_with_workspace(&workspace)?;
 
     let baseline_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(data_path, &workspace, false).await
+        data_processor.load_cloud_storage_data(data_path, &workspace).await
     })?;
 
     // Load current data
@@ -1997,7 +1997,7 @@ fn streaming_diff_command(
     let (from_hashes, to_hashes) = rt.block_on(async {
         // Stream from snapshot data
         let mut from_processor = DataProcessor::new_with_workspace(&workspace)?;
-        let from_rows = from_processor.load_cloud_storage_data(from_data_path, &workspace, false).await?;
+        let from_rows = from_processor.load_cloud_storage_data(from_data_path, &workspace).await?;
         let from_stream_data: Vec<(u64, Vec<String>)> = from_rows
             .into_iter()
             .enumerate()
@@ -2006,7 +2006,7 @@ fn streaming_diff_command(
 
         // Stream to snapshot data
         let mut to_processor = DataProcessor::new_with_workspace(&workspace)?;
-        let to_rows = to_processor.load_cloud_storage_data(to_data_path, &workspace, false).await?;
+        let to_rows = to_processor.load_cloud_storage_data(to_data_path, &workspace).await?;
         let to_stream_data: Vec<(u64, Vec<String>)> = to_rows
             .into_iter()
             .enumerate()
@@ -2186,13 +2186,13 @@ fn diff_command(
     progress_reporter.update_archive("Loading snapshot data...");
     
     let from_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(from_data_path, &workspace, false).await
+        data_processor.load_cloud_storage_data(from_data_path, &workspace).await
     })?;
     println!("FROM DATA {from_row_data:?}");
     progress_reporter.update_archive("Loading comparison data...");
     
     let to_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(to_data_path, &workspace, false).await
+        data_processor.load_cloud_storage_data(to_data_path, &workspace).await
     })?;
     println!("TO DATA {to_row_data:?}");
 

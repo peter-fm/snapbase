@@ -790,14 +790,14 @@ impl StreamingChangeDetector {
             },
             DataSource::StoredSnapshot { path, workspace } => {
                 let mut processor = DataProcessor::new_with_workspace(workspace)?;
-                let data = processor.load_cloud_storage_data(path, workspace, true).await?;
+                let data = processor.load_cloud_storage_data(path, workspace).await?;
                 
                 // For stored snapshots, we can infer the schema from the first row of data
                 // and exclude snapbase metadata columns
                 let mut columns = Vec::new();
                 if let Some(first_row) = data.first() {
-                    // Snapbase adds 5 metadata columns: __snapbase_removed, __snapbase_added, __snapbase_modified, snapshot_name, snapshot_timestamp
-                    let metadata_column_count = 5;
+                    // Snapbase adds 4 metadata columns: __snapbase_added, __snapbase_modified, snapshot_name, snapshot_timestamp
+                    let metadata_column_count = 4;
                     let original_column_count = first_row.len().saturating_sub(metadata_column_count);
                     
                     for col_index in 0..original_column_count {

@@ -8,37 +8,6 @@ from unittest.mock import patch
 from io import StringIO
 import snapbase
 
-
-class TestMainFunction:
-    """Test the main function and CLI entry point"""
-    
-    def test_main_function_exists(self):
-        """Test that main function exists"""
-        assert hasattr(snapbase, 'main')
-        assert callable(snapbase.main)
-    
-    def test_main_function_output(self):
-        """Test that main function produces expected output"""
-        with patch('sys.stdout', new_callable=StringIO) as mock_stdout:
-            snapbase.main()
-            output = mock_stdout.getvalue()
-            assert "Hello from snapbase!" in output
-    
-    def test_main_function_no_args(self):
-        """Test main function with no arguments"""
-        # Should not raise an exception
-        try:
-            snapbase.main()
-        except Exception as e:
-            pytest.fail(f"main() raised an exception: {e}")
-    
-    def test_main_function_return_value(self):
-        """Test main function return value"""
-        result = snapbase.main()
-        # Should return None (typical for main functions)
-        assert result is None
-
-
 class TestModuleStructure:
     """Test the overall module structure"""
     
@@ -48,8 +17,6 @@ class TestModuleStructure:
         assert hasattr(snapbase, '__version__')
         assert hasattr(snapbase, '__all__')
         assert hasattr(snapbase, 'Workspace')
-        assert hasattr(snapbase, 'hello_from_bin')
-        assert hasattr(snapbase, 'main')
     
     def test_module_docstring(self):
         """Test that module has proper docstring"""
@@ -137,16 +104,6 @@ class TestCompatibility:
         """Test that we're running on a supported Python version"""
         # snapbase requires Python 3.9+
         assert sys.version_info >= (3, 9), f"Unsupported Python version: {sys.version}"
-    
-    def test_core_module_available(self):
-        """Test that the core Rust module is available"""
-        # This tests that the .so file was built correctly
-        try:
-            from snapbase import _core
-            result = _core.hello_from_bin()
-            assert result == "Hello from snapbase!"
-        except ImportError as e:
-            pytest.fail(f"Core module not available: {e}")
     
     def test_workspace_creation_cross_platform(self):
         """Test workspace creation works across platforms"""

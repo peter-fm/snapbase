@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 // Type alias for complex return types
-type DataChangeResult = (Vec<(Vec<String>, bool, bool, bool)>, Vec<crate::hash::ColumnInfo>);
+type DataChangeResult = (Vec<(Vec<String>, bool, bool)>, Vec<crate::hash::ColumnInfo>);
 
 fn get_duckdb_install_instructions() -> String {
     if cfg!(target_os = "windows") {
@@ -716,12 +716,11 @@ impl DataProcessor {
             self.compute_flags_with_change_detection(&baseline.schema, &baseline.data, &current_schema, &current_data)?
         } else {
             // No baseline - all rows are considered "added" (first snapshot)
-            let flag_data: Vec<(Vec<String>, bool, bool, bool)> = current_data.into_iter()
-                .map(|row| (row, false, true, false)) // (data, removed, added, modified)
+            let flag_data: Vec<(Vec<String>, bool, bool)> = current_data.into_iter()
+                .map(|row| (row, true, false)) // (data, added, modified)
                 .collect();
             let mut final_schema = current_schema.clone();
             final_schema.extend(vec![
-                crate::hash::ColumnInfo { name: "__snapbase_removed".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
                 crate::hash::ColumnInfo { name: "__snapbase_added".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
                 crate::hash::ColumnInfo { name: "__snapbase_modified".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
             ]);
@@ -760,11 +759,11 @@ impl DataProcessor {
         
         
         // Create flag mappings for current data rows
-        let mut current_row_flags: std::collections::HashMap<usize, (bool, bool, bool)> = std::collections::HashMap::new();
+        let mut current_row_flags: std::collections::HashMap<usize, (bool, bool)> = std::collections::HashMap::new();
         
         // Mark added rows (row_index refers to current data position)
         for addition in &changes.row_changes.added {
-            current_row_flags.insert(addition.row_index as usize, (false, true, false)); // (removed, added, modified)
+            current_row_flags.insert(addition.row_index as usize, (true, false)); // (added, modified)
         }
         
         // Mark modified rows (row_index refers to current data position)
@@ -775,48 +774,26 @@ impl DataProcessor {
             
             if total_fields_changed >= total_fields * 2 / 3 {
                 // If most fields changed, treat as addition (assume this is a new row)
-                current_row_flags.insert(modification.row_index as usize, (false, true, false)); // (removed, added, modified)
+                current_row_flags.insert(modification.row_index as usize, (true, false)); // (added, modified)
             } else {
-                current_row_flags.insert(modification.row_index as usize, (false, false, true)); // (removed, added, modified)
+                current_row_flags.insert(modification.row_index as usize, (false, true)); // (added, modified)
             }
         }
         
-        // Create result data with flags
+        // Create result data with flags - only include current data (no removed rows)
         let mut flag_data = Vec::new();
         
         // Add current data rows with their flags
         for (index, row) in current_data.iter().enumerate() {
-            let flags = current_row_flags.get(&index).unwrap_or(&(false, false, false));
-            flag_data.push((row.clone(), flags.0, flags.1, flags.2));
+            let flags = current_row_flags.get(&index).unwrap_or(&(false, false));
+            flag_data.push((row.clone(), flags.0, flags.1));
         }
         
-        // Add removed rows (row_index refers to baseline data position)
-        for removal in &changes.row_changes.removed {
-            if let Some(baseline_row) = baseline_data.get(removal.row_index as usize) {
-                // Convert baseline row to match current schema by padding or truncating as needed
-                let mut converted_row = Vec::new();
-                for current_col in current_schema.iter() {
-                    // Try to find this column in baseline schema
-                    if let Some(baseline_col_idx) = baseline_schema.iter().position(|col| col.name == current_col.name) {
-                        // Column exists in baseline, use its value
-                        if let Some(value) = baseline_row.get(baseline_col_idx) {
-                            converted_row.push(value.clone());
-                        } else {
-                            converted_row.push("".to_string()); // Default empty value
-                        }
-                    } else {
-                        // Column doesn't exist in baseline, use empty value
-                        converted_row.push("".to_string());
-                    }
-                }
-                flag_data.push((converted_row, true, false, false)); // (removed, added, modified)
-            }
-        }
+        // Note: Removed rows are NOT added to snapshots - this creates true snapshots
         
-        // Create final schema with flag columns
+        // Create final schema with flag columns (no removed column)
         let mut final_schema = current_schema.to_vec();
         final_schema.extend(vec![
-            crate::hash::ColumnInfo { name: "__snapbase_removed".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
             crate::hash::ColumnInfo { name: "__snapbase_added".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
             crate::hash::ColumnInfo { name: "__snapbase_modified".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
         ]);
@@ -828,7 +805,7 @@ impl DataProcessor {
     fn create_temp_table_with_flags(
         &mut self,
         schema: &[crate::hash::ColumnInfo],
-        flag_data: &[(Vec<String>, bool, bool, bool)],
+        flag_data: &[(Vec<String>, bool, bool)],
     ) -> Result<()> {
         // Drop existing temp table
         self.connection.execute("DROP TABLE IF EXISTS temp_flag_data", [])?;
@@ -856,7 +833,7 @@ impl DataProcessor {
             
             let mut stmt = self.connection.prepare(&insert_sql)?;
             
-            for (row_data, removed, added, modified) in flag_data {
+            for (row_data, added, modified) in flag_data {
                 // Build parameter slice - DuckDB will handle type conversion automatically
                 let mut params: Vec<&dyn duckdb::ToSql> = Vec::new();
                 
@@ -865,8 +842,7 @@ impl DataProcessor {
                     params.push(value);
                 }
                 
-                // Add flag columns
-                params.push(removed);
+                // Add flag columns (only added and modified)
                 params.push(added); 
                 params.push(modified);
                 
@@ -1571,15 +1547,12 @@ impl DataProcessor {
         &mut self,
         data_path: &str,
         workspace: &crate::workspace::SnapbaseWorkspace,
-        exclude_removed: bool
     ) -> Result<Vec<Vec<String>>> {
         // Convert storage path to DuckDB-compatible path (handles both local and S3)
         let duckdb_path = workspace.storage().get_duckdb_path(data_path);
         
-        let query = match exclude_removed {
-            false => format!("SELECT * FROM read_parquet('{duckdb_path}')"),
-            true => format!("SELECT * FROM read_parquet('{duckdb_path}') where __snapbase_removed = false")
-        };
+        // True snapshots contain only current data - no need to filter removed rows
+        let query = format!("SELECT * FROM read_parquet('{duckdb_path}')");
         
         let mut stmt = self.connection.prepare(&query)
             .map_err(|e| crate::error::SnapbaseError::data_processing(
@@ -1904,8 +1877,7 @@ impl DataProcessor {
         let create_temp_query = format!(
             "CREATE TABLE {} AS 
              SELECT ROW_NUMBER() OVER () - 1 as row_num, * 
-             FROM read_parquet('{}') 
-             WHERE __snapbase_removed = false",
+             FROM read_parquet('{}')",
             temp_table, duckdb_path
         );
         

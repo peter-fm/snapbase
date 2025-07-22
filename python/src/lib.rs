@@ -17,7 +17,88 @@ use snapbase_core::{
     query::SnapshotQueryEngine,
     naming::SnapshotNamer,
     config::get_snapshot_config,
+    hash,
 };
+
+/// Output format for Python export operations
+#[derive(Debug, Clone)]
+enum PythonOutputFormat {
+    Csv,
+    Parquet,
+}
+
+/// Determine output format from file extension for Python bindings
+fn determine_python_output_format(path: &Path) -> Result<PythonOutputFormat, String> {
+    let extension = path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase());
+    
+    match extension.as_deref() {
+        Some("csv") => Ok(PythonOutputFormat::Csv),
+        Some("parquet") => Ok(PythonOutputFormat::Parquet),
+        Some(ext) => Err(format!(
+            "Unsupported output format: '{}'. Supported formats: csv, parquet", ext
+        )),
+        None => Err(
+            "Output file must have an extension (.csv or .parquet)".to_string()
+        ),
+    }
+}
+
+/// Create CSV content from schema and row data (Python version)
+fn create_csv_content(schema: &[hash::ColumnInfo], rows: &[Vec<String>]) -> Result<String, String> {
+    let mut content = String::new();
+    
+    // Filter out snapbase metadata columns - only keep original data columns
+    let original_columns: Vec<(usize, &hash::ColumnInfo)> = schema
+        .iter()
+        .enumerate()
+        .filter(|(_, col)| {
+            !col.name.starts_with("__snapbase_") && 
+            col.name != "snapshot_name" && 
+            col.name != "snapshot_timestamp"
+        })
+        .collect();
+    
+    // Write header
+    let headers: Vec<&str> = original_columns.iter().map(|(_, col)| col.name.as_str()).collect();
+    content.push_str(&headers.join(","));
+    content.push('\n');
+    
+    // Write data rows
+    for row in rows {
+        let row_values: Vec<String> = original_columns
+            .iter()
+            .map(|(idx, _)| {
+                row.get(*idx).cloned().unwrap_or_default()
+            })
+            .collect();
+        content.push_str(&row_values.join(","));
+        content.push('\n');
+    }
+    
+    Ok(content)
+}
+
+/// Export data to Parquet format (Python version)
+fn export_to_parquet(
+    schema: &[hash::ColumnInfo],
+    rows: &[Vec<String>],
+    output_path: &Path,
+    _workspace: &SnapbaseWorkspace,
+) -> Result<(), String> {
+    // For now, we'll export as CSV until we implement proper Parquet export
+    // This ensures API consistency across interfaces
+    let csv_content = create_csv_content(schema, rows)?;
+    std::fs::write(output_path, csv_content)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+    
+    // TODO: Implement proper Parquet export using DuckDB
+    // For now, warn the user that we're using CSV format
+    eprintln!("Warning: Parquet export not yet fully implemented in Python bindings, saved as CSV");
+    
+    Ok(())
+}
 
 /// Python wrapper for SnapbaseWorkspace
 #[pyclass]
@@ -139,10 +220,8 @@ impl Workspace {
         let mut data_processor = DataProcessor::new_with_workspace(&self.workspace)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create data processor: {}", e)))?;
             
-        // Convert storage path to DuckDB-accessible path
-        let duckdb_data_path = self.workspace.storage().get_duckdb_path(data_path);
         let baseline_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&duckdb_data_path, &self.workspace, false).await
+            data_processor.load_cloud_storage_data(&data_path, &self.workspace).await
         }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load baseline data: {}", e)))?;
         
         // Load current data
@@ -296,16 +375,12 @@ impl Workspace {
         let to_data_path = to_resolved.data_path.as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("To snapshot has no data path"))?;
         
-        // Convert storage paths to DuckDB-accessible paths
-        let duckdb_from_path = self.workspace.storage().get_duckdb_path(from_data_path);
-        let duckdb_to_path = self.workspace.storage().get_duckdb_path(to_data_path);
-        
         let from_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&duckdb_from_path, &self.workspace, false).await
+            data_processor.load_cloud_storage_data(&from_data_path, &self.workspace).await
         }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load from data: {}", e)))?;
         
         let to_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&duckdb_to_path, &self.workspace, false).await
+            data_processor.load_cloud_storage_data(&to_data_path, &self.workspace).await
         }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load to data: {}", e)))?;
         
         // Perform change detection
@@ -323,23 +398,78 @@ impl Workspace {
         Ok(serde_json::to_string_pretty(&diff_json)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to format diff: {}", e)))?)
     }
+
+    /// Export snapshot data to a file
+    #[pyo3(signature = (source, output_file, to_snapshot, force=false))]
+    fn export(&self, source: &str, output_file: &str, to_snapshot: &str, force: bool) -> PyResult<String> {
+        let resolver = SnapshotResolver::new(self.workspace.clone());
+        
+        // Resolve target snapshot
+        let target_snapshot = resolver.resolve_by_name_for_source(to_snapshot, Some(source))
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve target snapshot: {}", e)))?;
+
+        // Load target snapshot data
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
+        
+        // Get metadata to determine schema
+        let metadata = if let Some(preloaded) = target_snapshot.get_metadata() {
+            preloaded.clone()
+        } else if let Some(json_path) = &target_snapshot.json_path {
+            let metadata_data = rt.block_on(async {
+                self.workspace.storage().read_file(json_path).await
+            }).map_err(|e| PyRuntimeError::new_err(format!("Failed to read target metadata: {}", e)))?;
+            serde_json::from_slice::<SnapshotMetadata>(&metadata_data)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to parse target metadata: {}", e)))?
+        } else {
+            return Err(PyRuntimeError::new_err("Target snapshot not found"));
+        };
+        
+        let target_schema = metadata.columns.clone();
+        
+        // Load row data from storage
+        let data_path = target_snapshot.data_path.as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Target snapshot has no data path"))?;
+        
+        let mut data_processor = DataProcessor::new_with_workspace(&self.workspace)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create data processor: {}", e)))?;
+            
+        let target_row_data = rt.block_on(async {
+            // Convert storage path to DuckDB-accessible path (same logic as diff method)
+            data_processor.load_cloud_storage_data(&data_path, &self.workspace).await
+        }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load target data: {}", e)))?;
+        
+        // Determine output format from file extension
+        let output_path = Path::new(output_file);
+        let output_format = determine_python_output_format(output_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Invalid output format: {}", e)))?;
+        
+        // Check if output file already exists
+        if output_path.exists() && !force {
+            return Err(PyRuntimeError::new_err(format!(
+                "Output file '{}' already exists. Use force=True to overwrite.", output_file
+            )));
+        }
+        
+        // Export the data
+        match output_format {
+            PythonOutputFormat::Csv => {
+                let csv_content = create_csv_content(&target_schema, &target_row_data)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to create CSV: {}", e)))?;
+                std::fs::write(output_path, csv_content)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to write CSV file: {}", e)))?;
+            }
+            PythonOutputFormat::Parquet => {
+                export_to_parquet(&target_schema, &target_row_data, output_path, &self.workspace)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to export Parquet: {}", e)))?;
+            }
+        }
+        
+        Ok(format!("Exported snapshot '{}' from '{}' to '{}' ({} rows, {} columns)", 
+                  to_snapshot, source, output_file, target_row_data.len(), target_schema.len()))
+    }
 }
 
-/// Test function to verify the module works
-#[pyfunction]
-fn hello_from_bin() -> String {
-    "Hello from snapbase!".to_string()
-}
-
-/// A Python module implemented in Rust. The name of this function must match
-/// the `lib.name` setting in the `Cargo.toml`, else Python will not be able to
-/// import the module.
-#[pymodule]
-fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<Workspace>()?;
-    m.add_function(wrap_pyfunction!(hello_from_bin, m)?)?;
-    Ok(())
-}
 
 /// Convert SnapbaseResult to PyResult
 fn _convert_result<T>(result: SnapbaseResult<T>) -> PyResult<T> {
@@ -430,4 +560,13 @@ fn create_hive_snapshot(
     })?;
     
     Ok(metadata)
+}
+
+/// A Python module implemented in Rust. The name of this function must match
+/// the `lib.name` setting in the `Cargo.toml`, else Python will not be able to
+/// import the module.
+#[pymodule]
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Workspace>()?;
+    Ok(())
 }

@@ -57,16 +57,21 @@ impl TestWorkspace {
         let config_content = fs::read_to_string(&source_config)
             .expect("Failed to read config file");
         
-        // Create storage directory within temp workspace
-        let storage_dir = path.join("snapbase_storage");
-        fs::create_dir_all(&storage_dir)
-            .expect("Failed to create storage directory");
-        
-        // Update config to use the temp storage directory
-        let updated_config = config_content.replace(
-            "path = \"snapbase_storage\"",
-            &format!("path = \"{}\"", storage_dir.to_string_lossy())
-        );
+        // Handle different storage path configurations
+        let updated_config = if config_content.contains("path = \".snapbase\"") {
+            // Keep .snapbase path as-is for CLI tests
+            config_content
+        } else {
+            // Create storage directory within temp workspace for custom path tests
+            let storage_dir = path.join("snapbase_storage");
+            fs::create_dir_all(&storage_dir)
+                .expect("Failed to create storage directory");
+            
+            config_content.replace(
+                "path = \"snapbase_storage\"",
+                &format!("path = \"{}\"", storage_dir.to_string_lossy())
+            )
+        };
         
         // Write updated config
         fs::write(&config_path, updated_config)

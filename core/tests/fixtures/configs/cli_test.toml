@@ -1,0 +1,13 @@
+[storage]
+backend = "local"
+
+[storage.local]
+path = ".snapbase"
+
+[storage.s3]
+bucket = "unused"
+prefix = "unused"
+region = "us-east-1"
+
+[snapshot]
+default_name_pattern = "{source}_{timestamp}"

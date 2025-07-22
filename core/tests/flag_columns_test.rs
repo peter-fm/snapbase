@@ -47,32 +47,29 @@ fn test_flag_columns_exist_in_parquet_no_baseline() -> Result<()> {
         columns.push(row?);
     }
     
-    // Should have 6 columns: id, name, age, __snapbase_removed, __snapbase_added, __snapbase_modified
+    // Should have 5 columns: id, name, age, __snapbase_added, __snapbase_modified  
     println!("DEBUG: Found columns: {columns:?}");
-    assert_eq!(columns.len(), 6, "Should have 6 columns including 3 flag columns, got: {columns:?}");
+    assert_eq!(columns.len(), 5, "Should have 5 columns including 2 flag columns, got: {columns:?}");
     assert_eq!(columns[0], "id");
     assert_eq!(columns[1], "name");
     assert_eq!(columns[2], "age");
-    assert_eq!(columns[3], "__snapbase_removed");
-    assert_eq!(columns[4], "__snapbase_added");
-    assert_eq!(columns[5], "__snapbase_modified");
+    assert_eq!(columns[3], "__snapbase_added");
+    assert_eq!(columns[4], "__snapbase_modified");
     
     // Check flag values - all should be added=true for first snapshot
-    let data_sql = "SELECT __snapbase_removed, __snapbase_added, __snapbase_modified FROM temp_parquet_view".to_string();
+    let data_sql = "SELECT __snapbase_added, __snapbase_modified FROM temp_parquet_view".to_string();
     let mut stmt = reader_processor.connection.prepare(&data_sql)?;
     let flag_rows = stmt.query_map([], |row| {
-        let removed: bool = row.get(0)?;
-        let added: bool = row.get(1)?;
-        let modified: bool = row.get(2)?;
-        Ok((removed, added, modified))
+        let added: bool = row.get(0)?;
+        let modified: bool = row.get(1)?;
+        Ok((added, modified))
     })?;
     
     // Check each row
     let mut row_count = 0;
     for row in flag_rows {
-        let (removed, added, modified) = row?;
+        let (added, modified) = row?;
         row_count += 1;
-        assert!(!removed, "Row {row_count} should not be removed");
         assert!(added, "Row {row_count} should be added");
         assert!(!modified, "Row {row_count} should not be modified");
     }
@@ -154,21 +151,19 @@ fn test_flag_columns_with_baseline_changes() -> Result<()> {
     }
     
     // Should have flag columns
-    assert!(columns.contains(&"__snapbase_removed".to_string()), "Should have __snapbase_removed column");
     assert!(columns.contains(&"__snapbase_added".to_string()), "Should have __snapbase_added column");
     assert!(columns.contains(&"__snapbase_modified".to_string()), "Should have __snapbase_modified column");
     
     // Check flag values for expected changes
-    let data_sql = "SELECT id, name, age, __snapbase_removed, __snapbase_added, __snapbase_modified FROM temp_parquet_view ORDER BY id".to_string();
+    let data_sql = "SELECT id, name, age, __snapbase_added, __snapbase_modified FROM temp_parquet_view ORDER BY id".to_string();
     let mut stmt = reader_processor.connection.prepare(&data_sql)?;
     let flag_rows = stmt.query_map([], |row| {
         let id: i32 = row.get(0)?;
         let name: String = row.get(1)?;
         let age: i32 = row.get(2)?;
-        let removed: bool = row.get(3)?;
-        let added: bool = row.get(4)?;
-        let modified: bool = row.get(5)?;
-        Ok((id, name, age, removed, added, modified))
+        let added: bool = row.get(3)?;
+        let modified: bool = row.get(4)?;
+        Ok((id, name, age, added, modified))
     })?;
     
     let mut found_rows = Vec::new();
@@ -176,42 +171,43 @@ fn test_flag_columns_with_baseline_changes() -> Result<()> {
         found_rows.push(row?);
     }
     
-    // Should have rows for current data + removed data
+    // Should have rows for current data only (no removed rows in true snapshots)
     assert!(found_rows.len() >= 3, "Should have at least 3 rows (current data)");
     
-    // Check specific expected changes:
+    // Check specific expected changes (only current data in true snapshots):
     // - Alice (id=1): age changed from 25 to 26 -> modified=true
-    // - Bob (id=2): unchanged -> all flags false
-    // - Charlie (id=3): removed from current -> removed=true
+    // - Bob (id=2): unchanged -> all flags false  
     // - David (id=4): added to current -> added=true
+    // - Charlie (id=3): NOT in snapshot (removed from current)
     
-    let alice_row = found_rows.iter().find(|(id, _, _, _, _, _)| *id == 1);
-    let bob_row = found_rows.iter().find(|(id, _, _, _, _, _)| *id == 2);
-    let david_row = found_rows.iter().find(|(id, _, _, _, _, _)| *id == 4);
+    let alice_row = found_rows.iter().find(|(id, _, _, _, _)| *id == 1);
+    let bob_row = found_rows.iter().find(|(id, _, _, _, _)| *id == 2);
+    let david_row = found_rows.iter().find(|(id, _, _, _, _)| *id == 4);
+    let charlie_row = found_rows.iter().find(|(id, _, _, _, _)| *id == 3);
     
-    if let Some((_, _, _, removed, added, modified)) = alice_row {
-        assert!(!(*removed), "Alice should not be removed");
+    if let Some((_, _, _, added, modified)) = alice_row {
         assert!(!(*added), "Alice should not be added (existed before)");
         assert!(*modified, "Alice should be modified (age changed)");
     } else {
         panic!("Alice row not found");
     }
     
-    if let Some((_, _, _, removed, added, modified)) = bob_row {
-        assert!(!(*removed), "Bob should not be removed");
+    if let Some((_, _, _, added, modified)) = bob_row {
         assert!(!(*added), "Bob should not be added");
         assert!(!(*modified), "Bob should not be modified");
     } else {
         panic!("Bob row not found");
     }
     
-    if let Some((_, _, _, removed, added, modified)) = david_row {
-        assert!(!(*removed), "David should not be removed");
+    if let Some((_, _, _, added, modified)) = david_row {
         assert!(*added, "David should be added");
         assert!(!(*modified), "David should not be modified");
     } else {
         panic!("David row not found");
     }
+    
+    // Charlie should NOT be in the snapshot (removed rows don't appear in true snapshots)
+    assert!(charlie_row.is_none(), "Charlie should not be in snapshot (was removed)");
     
     Ok(())
 }

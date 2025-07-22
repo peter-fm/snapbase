@@ -346,6 +346,53 @@ public class SnapbaseWorkspace implements Closeable {
     }
     
     /**
+     * Export snapshot data to a file.
+     * 
+     * @param source Source file or pattern
+     * @param outputFile Output file path (format determined by extension: .csv or .parquet)
+     * @param toSnapshot Name of the snapshot to export
+     * @return Result message indicating success and export details
+     * @throws SnapbaseException if export operation fails
+     */
+    public String export(String source, String outputFile, String toSnapshot) throws SnapbaseException {
+        return export(source, outputFile, toSnapshot, false);
+    }
+    
+    /**
+     * Export snapshot data to a file with force option.
+     * 
+     * @param source Source file or pattern
+     * @param outputFile Output file path (format determined by extension: .csv or .parquet)
+     * @param toSnapshot Name of the snapshot to export
+     * @param force Skip confirmation prompts and overwrite existing files
+     * @return Result message indicating success and export details
+     * @throws SnapbaseException if export operation fails
+     */
+    public String export(String source, String outputFile, String toSnapshot, boolean force) throws SnapbaseException {
+        checkHandle();
+        return nativeExport(nativeHandle, source, outputFile, toSnapshot, force);
+    }
+    
+    /**
+     * Export snapshot data to a file asynchronously.
+     * 
+     * @param source Source file or pattern
+     * @param outputFile Output file path (format determined by extension: .csv or .parquet)
+     * @param toSnapshot Name of the snapshot to export
+     * @param force Skip confirmation prompts and overwrite existing files
+     * @return CompletableFuture that completes with the result message
+     */
+    public CompletableFuture<String> exportAsync(String source, String outputFile, String toSnapshot, boolean force) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return export(source, outputFile, toSnapshot, force);
+            } catch (SnapbaseException e) {
+                throw new RuntimeException(e);
+            }
+        }, executor);
+    }
+    
+    /**
      * Close the workspace and free native resources.
      */
     @Override
@@ -447,5 +494,6 @@ public class SnapbaseWorkspace implements Closeable {
     private static native boolean nativeSnapshotExists(long handle, String name) throws SnapbaseException;
     private static native String nativeStats(long handle) throws SnapbaseException;
     private static native String nativeDiff(long handle, String source, String fromSnapshot, String toSnapshot) throws SnapbaseException;
+    private static native String nativeExport(long handle, String source, String outputFile, String toSnapshot, boolean force) throws SnapbaseException;
     private static native void nativeClose(long handle);
 }

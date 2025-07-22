@@ -4,7 +4,7 @@ Basic tests for snapbase Python bindings
 
 import pytest
 import snapbase
-from snapbase import Workspace, hello_from_bin
+from snapbase import Workspace
 
 
 class TestBasicFunctionality:
@@ -13,7 +13,6 @@ class TestBasicFunctionality:
     def test_module_imports(self):
         """Test that the module can be imported"""
         assert hasattr(snapbase, 'Workspace')
-        assert hasattr(snapbase, 'hello_from_bin')
         assert hasattr(snapbase, '__version__')
     
     def test_version_string(self):
@@ -21,18 +20,11 @@ class TestBasicFunctionality:
         assert isinstance(snapbase.__version__, str)
         assert len(snapbase.__version__) > 0
     
-    def test_hello_from_bin(self):
-        """Test the basic hello function"""
-        result = hello_from_bin()
-        assert isinstance(result, str)
-        assert result == "Hello from snapbase!"
-    
     def test_all_exports(self):
         """Test that __all__ is properly defined"""
         assert hasattr(snapbase, '__all__')
         assert isinstance(snapbase.__all__, list)
         assert 'Workspace' in snapbase.__all__
-        assert 'hello_from_bin' in snapbase.__all__
 
 
 class TestWorkspaceBasics:

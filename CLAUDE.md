@@ -137,10 +137,18 @@ cd java && mvn test
 
 ## Important Implementation Details
 
+### True Snapshots Architecture (v2.0+)
+- **True Snapshots**: Each snapshot contains ONLY the data that existed at that point in time
+- **No Removed Rows**: Removed rows are NOT stored in snapshots (eliminated `__snapbase_removed` column)
+- **4 Metadata Columns**: Only `__snapbase_added`, `__snapbase_modified`, `snapshot_name`, `snapshot_timestamp`
+- **Simplified Logic**: No more `exclude_removed` parameters - all snapshot data is current
+- **Better UX**: Users see intuitive snapshot behavior where each snapshot represents the actual state
+
 ### Storage Architecture
 - Modern Hive-style partitioning replaces legacy archive system
 - Metadata stored as JSON, data as Parquet files
 - Cloud storage support through async storage backend abstraction
+- True snapshots eliminate complexity of logical vs physical deletion
 
 ### Performance Optimizations
 - Streaming data processing for large files

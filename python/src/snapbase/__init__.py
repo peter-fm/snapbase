@@ -6,14 +6,10 @@ allowing you to create snapshots of structured data and detect changes
 between versions.
 """
 
-from snapbase._core import hello_from_bin, Workspace
+from snapbase._core import Workspace
 
 __version__ = "0.1.0"
-__all__ = ["Workspace", "hello_from_bin"]
-
-
-def main() -> None:
-    print(hello_from_bin())
+__all__ = ["Workspace"]
 
 
 def test_runner() -> None:
