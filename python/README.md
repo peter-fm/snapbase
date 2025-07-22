@@ -52,8 +52,8 @@ print(f"Created snapshot: {snapshot.name}")
 # Make changes to your data file, then create another snapshot
 updated_snapshot = workspace.create_snapshot("data.csv", name="updated")
 
-# Detect changes between snapshots
-changes = workspace.detect_changes("data.csv", baseline="initial")
+# Check status against baseline
+changes = workspace.status("data.csv", baseline="initial")
 print(f"Detected {len(changes)} changes")
 
 # List all snapshots
@@ -191,9 +191,9 @@ workspace.create_snapshot("inventory.csv", name="baseline")
 
 # ... make changes to inventory.csv ...
 
-# Create new snapshot and detect changes
+# Create new snapshot and check status
 workspace.create_snapshot("inventory.csv", name="current")
-changes = workspace.detect_changes("inventory.csv", baseline="baseline")
+changes = workspace.status("inventory.csv", baseline="baseline")
 
 # Analyze changes
 for change in changes:
@@ -259,8 +259,8 @@ List all snapshots, optionally filtered by file path.
 
 **Returns:** List of `Snapshot` objects
 
-##### `detect_changes(file_path: str, baseline: str = None) -> List[Change]`
-Detect changes between current file state and a baseline snapshot.
+##### `status(file_path: str, baseline: str = None) -> List[Change]`
+Check status of current file against a baseline snapshot.
 
 **Parameters:**
 - `file_path`: Path to the file to analyze
@@ -505,7 +505,7 @@ def run_etl_pipeline():
     snapshots = workspace.list_snapshots("output_data.csv")
     if len(snapshots) > 1:
         previous_snapshot = snapshots[-2]  # Second most recent
-        changes = workspace.detect_changes("output_data.csv", baseline=previous_snapshot.name)
+        changes = workspace.status("output_data.csv", baseline=previous_snapshot.name)
         
         if changes:
             print(f"ETL pipeline detected {len(changes)} changes")
@@ -541,7 +541,7 @@ def monitor_api_endpoint():
     snapshot = workspace.create_snapshot("api_response.json", name=f"api_{datetime.now():%Y%m%d_%H%M%S}")
     
     # Check for changes
-    changes = workspace.detect_changes("api_response.json")
+    changes = workspace.status("api_response.json")
     if changes:
         print(f"API structure changed! {len(changes)} changes detected")
         for change in changes:

@@ -1766,13 +1766,16 @@ impl DataProcessor {
         
         self.connection.execute(&create_temp_query, [])?;
         
-        // Now we can use a simple WHERE clause on the temp table
+        // Build column list dynamically to avoid duplicates
+        let column_names: Vec<String> = columns.iter().map(|c| format!("\"{}\"", c.name)).collect();
+        let columns_str = column_names.join(", ");
         let query = format!(
-            "SELECT row_num, * FROM {} WHERE row_num IN ({})",
-            temp_table, indices_list
+            "SELECT row_num, {} FROM {} WHERE row_num IN ({})",
+            columns_str, temp_table, indices_list
         );
         
         let mut stmt = self.connection.prepare(&query)?;
+        
         let rows = stmt.query_map([], |row| {
             // First column is row_num, rest are the actual data
             let row_num: u64 = row.get(0)?;

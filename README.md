@@ -2,15 +2,15 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A snapshot-based structured data diff tool that detects schema, column-level, and cell-level changes between versions of structured datasets.
+A queryable timemachine of your structured data from entire databases and SQL queries to CSV, parquet and JSON files.
 
 ## Features
 
 ✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
-📊 **Multiple format support** - CSV, JSON, Parquet, and SQL files  
+📊 **Multiple format support** - Databases, CSV, JSON, Parquet, and SQL files  
 ☁️ **Cloud storage support** - Store snapshots locally or in S3  
-📈 **SQL querying** - Query historical snapshots using SQL  
+📈 **SQL querying** - Query across snapshots using SQL to monitor changes over time.  
 ⚡ **Performance optimized** - Streaming processing for large datasets  
 
 ## Components
@@ -66,13 +66,18 @@ uv add snapbase
 ```bash
 # Initialize workspace
 snapbase init
-
 # Create snapshots
 snapbase snapshot data.csv --name initial
-snapbase snapshot data.csv --name updated
-
-# Check changes
+# Later see if the file has changed
 snapbase status data.csv
+# Snapshot the new state
+snapbase snapshot data.csv --name updated
+# Go back in time!
+snapbase query data.csv "select * from data where snapshot_name = 'initial'" 
+# Revert csv back
+snapbase export data.csv --to initial --file data.csv --force
+
+
 ```
 
 **Python:**

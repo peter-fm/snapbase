@@ -84,8 +84,8 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/path/to/workspace")) 
     String result = workspace.createSnapshot("data.csv", "v1");
     System.out.println(result);
     
-    // Detect changes against baseline
-    String changes = workspace.detectChanges("data.csv", "v1");
+    // Check status against baseline
+    String changes = workspace.status("data.csv", "v1");
     System.out.println(changes);
     
     // Query historical data with zero-copy Arrow performance
@@ -118,9 +118,9 @@ The main class for interacting with Snapbase functionality.
 - `String createSnapshot(String filePath, String name)` - Create snapshot with specific name
 - `CompletableFuture<String> createSnapshotAsync(String filePath, String name)` - Async snapshot creation
 
-#### Change Detection
-- `String detectChanges(String filePath, String baseline)` - Detect changes as JSON string
-- `JsonNode detectChangesAsJson(String filePath, String baseline)` - Detect changes as parsed JSON
+#### Status Checking
+- `String status(String filePath, String baseline)` - Check status against baseline as JSON string
+- `JsonNode statusAsJson(String filePath, String baseline)` - Check status against baseline as parsed JSON
 
 #### Zero-Copy Arrow Querying
 - `VectorSchemaRoot query(String source, String sql)` - Query snapshots returning Arrow data (zero-copy)
@@ -168,7 +168,7 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/my/workspace")) {
 }
 ```
 
-### Change Detection
+### Status Checking
 
 ```java
 // Create baseline snapshot
@@ -176,8 +176,8 @@ workspace.createSnapshot("customers.csv", "baseline");
 
 // ... modify the file ...
 
-// Detect what changed
-JsonNode changes = workspace.detectChangesAsJson("customers.csv", "baseline");
+// Check what changed against baseline
+JsonNode changes = workspace.statusAsJson("customers.csv", "baseline");
 if (changes.has("added_rows")) {
     System.out.println("Added rows: " + changes.get("added_rows").size());
 }

@@ -302,6 +302,15 @@ impl StreamingChangeDetector {
                 current_schema,
             )?;
             
+            #[cfg(debug_assertions)]
+            {
+                eprintln!("DEBUG Content matching:");
+                eprintln!("  unmatched_baseline: {:?}", unmatched_baseline);
+                eprintln!("  unmatched_current: {:?}", unmatched_current);
+                eprintln!("  common_columns: {:?}", common_columns);
+                eprintln!("  matches found: {:?}", matches);
+            }
+            
             // Record matched pairs as modifications
             for (baseline_idx, current_idx) in matches {
                 // Perform detailed cell-level analysis
@@ -315,11 +324,29 @@ impl StreamingChangeDetector {
                         current_schema,
                     );
                     
+                    #[cfg(debug_assertions)]
+                    {
+                        eprintln!("DEBUG Row comparison baseline_idx={} current_idx={}:", baseline_idx, current_idx);
+                        eprintln!("  baseline_row: {:?}", baseline_row);
+                        eprintln!("  current_row: {:?}", current_row);
+                        eprintln!("  changes found: {:?}", changes);
+                    }
+                    
                     if !changes.is_empty() {
                         modifications.push(RowModification {
                             row_index: current_idx,
                             changes,
                         });
+                        
+                        #[cfg(debug_assertions)]
+                        {
+                            eprintln!("  -> Added to modifications");
+                        }
+                    } else {
+                        #[cfg(debug_assertions)]
+                        {
+                            eprintln!("  -> No changes found, not added to modifications");
+                        }
                     }
                 }
                 
@@ -414,6 +441,11 @@ impl StreamingChangeDetector {
                             &current_col_map,
                         );
                         
+                        #[cfg(debug_assertions)]
+                        {
+                            eprintln!("    Similarity baseline_idx={} current_idx={}: {:.2}", baseline_idx, current_idx, similarity);
+                        }
+                        
                         if similarity > best_similarity {
                             best_similarity = similarity;
                             best_match = Some(current_idx);
@@ -443,6 +475,16 @@ impl StreamingChangeDetector {
         let mut matches = 0;
         let mut total = 0;
         
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("      Comparing rows:");
+            eprintln!("        baseline_row: {:?}", baseline_row);
+            eprintln!("        current_row: {:?}", current_row);
+            eprintln!("        common_columns: {:?}", common_columns);
+            eprintln!("        baseline_col_map: {:?}", baseline_col_map);
+            eprintln!("        current_col_map: {:?}", current_col_map);
+        }
+        
         for col_name in common_columns {
             if let (Some(&baseline_idx), Some(&current_idx)) = 
                 (baseline_col_map.get(col_name), current_col_map.get(col_name)) {
@@ -451,18 +493,42 @@ impl StreamingChangeDetector {
                     (baseline_row.get(baseline_idx), current_row.get(current_idx)) {
                     
                     total += 1;
-                    if baseline_val == current_val {
+                    let is_match = baseline_val == current_val;
+                    if is_match {
                         matches += 1;
                     }
+                    
+                    #[cfg(debug_assertions)]
+                    {
+                        eprintln!("        {}: '{}' vs '{}' -> {}", col_name, baseline_val, current_val, if is_match { "MATCH" } else { "DIFF" });
+                    }
+                } else {
+                    #[cfg(debug_assertions)]
+                    {
+                        eprintln!("        {}: missing values (baseline_idx={:?}, current_idx={:?})", col_name, 
+                            baseline_row.get(baseline_idx), current_row.get(current_idx));
+                    }
+                }
+            } else {
+                #[cfg(debug_assertions)]
+                {
+                    eprintln!("        {}: column mapping failed", col_name);
                 }
             }
         }
         
-        if total > 0 {
+        let similarity = if total > 0 {
             matches as f64 / total as f64
         } else {
             0.0
+        };
+        
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("        -> similarity: {}/{} = {:.2}", matches, total, similarity);
         }
+        
+        similarity
     }
     
     /// Compare rows with schema awareness using schema arrays
@@ -656,6 +722,14 @@ impl StreamingChangeDetector {
         
         let changed_rows = Self::identify_changed_rows(&baseline_hashes, &current_hashes);
         
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("DEBUG ChangedRowsResult:");
+            eprintln!("  baseline_changed: {:?}", changed_rows.baseline_changed);
+            eprintln!("  current_changed: {:?}", changed_rows.current_changed); 
+            eprintln!("  unchanged_count: {}", changed_rows.unchanged_count);
+        }
+        
         // Phase 3: Detailed analysis of changed rows only
         if changed_rows.baseline_changed.is_empty() && changed_rows.current_changed.is_empty() {
             // No changes detected - return empty result
@@ -684,7 +758,19 @@ impl StreamingChangeDetector {
             });
         }
 
-        Self::analyze_changed_data_sources(&changed_rows, &baseline_source, &current_source, &options).await
+        let final_result = Self::analyze_changed_data_sources(&changed_rows, &baseline_source, &current_source, &options).await?;
+        
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("DEBUG Final ChangeDetectionResult:");
+            eprintln!("  schema_changes.has_changes(): {}", final_result.schema_changes.has_changes());
+            eprintln!("  row_changes.has_changes(): {}", final_result.row_changes.has_changes());
+            eprintln!("  modified: {}", final_result.row_changes.modified.len());
+            eprintln!("  added: {}", final_result.row_changes.added.len());
+            eprintln!("  removed: {}", final_result.row_changes.removed.len());
+        }
+        
+        Ok(final_result)
     }
 
     /// Phase 1: Build hash sets from data sources with built-in filtering
@@ -718,6 +804,10 @@ impl StreamingChangeDetector {
                 row
             };
             let hash = Self::compute_row_hash(&filtered_row);
+            #[cfg(debug_assertions)]
+            if index < 5 { // Only debug first 5 rows
+                eprintln!("DEBUG baseline row {}: {:?} -> hash: {}", index, filtered_row, hash);
+            }
             baseline_hashes.add_row(index as u64, hash);
         }
 
@@ -729,6 +819,10 @@ impl StreamingChangeDetector {
                 row
             };
             let hash = Self::compute_row_hash(&filtered_row);
+            #[cfg(debug_assertions)]
+            if index < 5 { // Only debug first 5 rows
+                eprintln!("DEBUG current row {}: {:?} -> hash: {}", index, filtered_row, hash);
+            }
             current_hashes.add_row(index as u64, hash);
         }
 
@@ -792,23 +886,20 @@ impl StreamingChangeDetector {
                 let mut processor = DataProcessor::new_with_workspace(workspace)?;
                 let data = processor.load_cloud_storage_data(path, workspace).await?;
                 
-                // For stored snapshots, we can infer the schema from the first row of data
-                // and exclude snapbase metadata columns
-                let mut columns = Vec::new();
-                if let Some(first_row) = data.first() {
-                    // Snapbase adds 4 metadata columns: __snapbase_added, __snapbase_modified, snapshot_name, snapshot_timestamp
-                    let metadata_column_count = 4;
-                    let original_column_count = first_row.len().saturating_sub(metadata_column_count);
+                // Load actual schema from snapshot metadata instead of creating fake schema
+                let metadata_path = path.replace("data.parquet", "metadata.json");
+                let metadata_data = workspace.storage().read_file(&metadata_path).await
+                    .map_err(|e| crate::error::SnapbaseError::data_processing(
+                        format!("Failed to load snapshot metadata from '{}': {}", metadata_path, e)
+                    ))?;
                     
-                    for col_index in 0..original_column_count {
-                        columns.push(ColumnInfo {
-                            name: format!("column_{}", col_index),
-                            data_type: "TEXT".to_string(),
-                            nullable: true,
-                        });
-                    }
-                }
-                Ok((data, columns))
+                let metadata: crate::snapshot::SnapshotMetadata = serde_json::from_slice(&metadata_data)
+                    .map_err(|e| crate::error::SnapbaseError::data_processing(
+                        format!("Failed to parse snapshot metadata: {}", e)
+                    ))?;
+                
+                // Use the actual schema from snapshot metadata
+                Ok((data, metadata.columns))
             },
             DataSource::DatabaseQuery { connection_string: _, query: _ } => {
                 // TODO: Implement database query support
@@ -830,13 +921,42 @@ impl StreamingChangeDetector {
         match source {
             DataSource::File(path) => {
                 let mut processor = DataProcessor::new()?;
-                let _ = processor.load_file(path)?;
+                let data_info = processor.load_file(path)?;
                 let full_data = processor.load_specific_rows(row_indices).await?;
                 
-                // Apply filtering if needed
+                // Files don't have metadata columns, but may have row index as first column
                 if options.exclude_metadata_columns {
-                    // TODO: Get original column count and filter
-                    Ok(full_data)
+                    let expected_column_count = data_info.columns.len(); // Get expected column count from schema
+                    
+                    // Check if row data includes the row index as first column
+                    let filtered_data: HashMap<u64, Vec<String>> = full_data.into_iter()
+                        .map(|(row_index, row_data)| {
+                            // If the first element is the row index as string, skip it and take expected columns
+                            if !row_data.is_empty() && row_data[0] == row_index.to_string() {
+                                let filtered_row: Vec<String> = row_data.iter()
+                                    .skip(1)  // Skip row index
+                                    .take(expected_column_count)  // Take all expected data columns
+                                    .cloned()
+                                    .collect();
+                                
+                                #[cfg(debug_assertions)]
+                                {
+                                    eprintln!("DEBUG File row filtering: row_index={} row_data({} cols): {:?}", row_index, row_data.len(), row_data);
+                                    eprintln!("  Expected {} columns, taking after skip(1): {:?}", expected_column_count, filtered_row);
+                                }
+                                
+                                (row_index, filtered_row)
+                            } else {
+                                // No row index contamination - take expected columns as-is
+                                let filtered_row: Vec<String> = row_data.iter()
+                                    .take(expected_column_count)
+                                    .cloned()
+                                    .collect();
+                                (row_index, filtered_row)
+                            }
+                        })
+                        .collect();
+                    Ok(filtered_data)
                 } else {
                     Ok(full_data)
                 }
@@ -845,10 +965,53 @@ impl StreamingChangeDetector {
                 let mut processor = DataProcessor::new_with_workspace(workspace)?;
                 let full_data = processor.load_specific_rows_from_storage(path, workspace, row_indices).await?;
                 
-                // Apply filtering if needed  
+                // Apply filtering to exclude snapbase metadata columns
                 if options.exclude_metadata_columns {
-                    // TODO: Get original column count and filter
-                    Ok(full_data)
+                    // Load schema to get original column count
+                    let metadata_path = path.replace("data.parquet", "metadata.json");
+                    let metadata_data = workspace.storage().read_file(&metadata_path).await
+                        .map_err(|e| crate::error::SnapbaseError::data_processing(
+                            format!("Failed to load snapshot metadata for filtering: {}", e)
+                        ))?;
+                        
+                    let metadata: crate::snapshot::SnapshotMetadata = serde_json::from_slice(&metadata_data)
+                        .map_err(|e| crate::error::SnapbaseError::data_processing(
+                            format!("Failed to parse snapshot metadata for filtering: {}", e)
+                        ))?;
+                    
+                    let original_column_count = metadata.columns.len();
+                    
+                    #[cfg(debug_assertions)]
+                    {
+                        eprintln!("DEBUG Filtering: original_column_count={}", original_column_count);
+                        eprintln!("  metadata.columns: {:?}", metadata.columns.iter().map(|c| &c.name).collect::<Vec<_>>());
+                    }
+                    
+                    // Filter each row to exclude metadata columns
+                    let filtered_data: HashMap<u64, Vec<String>> = full_data.into_iter()
+                        .map(|(row_index, row_data)| {
+                            #[cfg(debug_assertions)]
+                            {
+                                eprintln!("DEBUG Raw row_index={} row_data({} cols): {:?}", row_index, row_data.len(), row_data);
+                            }
+                            
+                            // Skip the first column (row index) and take the next original_column_count columns
+                            let filtered_row: Vec<String> = row_data.iter()
+                                .skip(1)  // Skip row index
+                                .take(original_column_count)
+                                .cloned()
+                                .collect();
+                                
+                            #[cfg(debug_assertions)]
+                            {
+                                eprintln!("  -> Filtered({} cols): {:?}", filtered_row.len(), filtered_row);
+                            }
+                            
+                            (row_index, filtered_row)
+                        })
+                        .collect();
+                    
+                    Ok(filtered_data)
                 } else {
                     Ok(full_data)
                 }
