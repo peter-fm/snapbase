@@ -36,7 +36,7 @@ import java.util.concurrent.Executors;
  * try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/path/to/workspace")) {
  *     workspace.init();
  *     String result = workspace.createSnapshot("data.csv", "v1");
- *     String changes = workspace.detectChanges("data.csv", "v1");
+ *     String changes = workspace.status("data.csv", "v1");
  * }
  * </pre>
  */
@@ -138,32 +138,32 @@ public class SnapbaseWorkspace implements Closeable {
     }
     
     /**
-     * Detect changes between current file and a baseline snapshot.
+     * Check status of current file against a baseline snapshot.
      * 
      * @param filePath Path to the current file
      * @param baseline Name of the baseline snapshot
-     * @return JSON string containing change information
-     * @throws SnapbaseException if change detection fails
+     * @return JSON string containing status information
+     * @throws SnapbaseException if status check fails
      */
-    public String detectChanges(String filePath, String baseline) throws SnapbaseException {
+    public String status(String filePath, String baseline) throws SnapbaseException {
         checkHandle();
-        return nativeDetectChanges(nativeHandle, filePath, baseline);
+        return nativeStatus(nativeHandle, filePath, baseline);
     }
     
     /**
-     * Detect changes between current file and a baseline snapshot.
+     * Check status of current file against a baseline snapshot.
      * 
      * @param filePath Path to the current file
      * @param baseline Name of the baseline snapshot
-     * @return Parsed changes as a JsonNode
-     * @throws SnapbaseException if change detection fails
+     * @return Parsed status as a JsonNode
+     * @throws SnapbaseException if status check fails
      */
-    public JsonNode detectChangesAsJson(String filePath, String baseline) throws SnapbaseException {
-        String changesJson = detectChanges(filePath, baseline);
+    public JsonNode statusAsJson(String filePath, String baseline) throws SnapbaseException {
+        String statusJson = status(filePath, baseline);
         try {
-            return objectMapper.readTree(changesJson);
+            return objectMapper.readTree(statusJson);
         } catch (IOException e) {
-            throw new SnapbaseException("Failed to parse changes JSON: " + e.getMessage(), e);
+            throw new SnapbaseException("Failed to parse status JSON: " + e.getMessage(), e);
         }
     }
     
@@ -486,7 +486,7 @@ public class SnapbaseWorkspace implements Closeable {
     private static native long nativeCreateWorkspace(String workspacePath) throws SnapbaseException;
     private static native void nativeInit(long handle) throws SnapbaseException;
     private static native String nativeCreateSnapshot(long handle, String filePath, String name) throws SnapbaseException;
-    private static native String nativeDetectChanges(long handle, String filePath, String baseline) throws SnapbaseException;
+    private static native String nativeStatus(long handle, String filePath, String baseline) throws SnapbaseException;
     private static native void nativeQueryArrow(long handle, String source, String sql, long arrayPtr, long schemaPtr) throws SnapbaseException;
     private static native String nativeGetPath(long handle) throws SnapbaseException;
     private static native List<String> nativeListSnapshots(long handle) throws SnapbaseException;

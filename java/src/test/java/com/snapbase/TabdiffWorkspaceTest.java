@@ -101,7 +101,7 @@ class SnapbaseWorkspaceTest {
     }
     
     @Test
-    void testDetectChanges() throws SnapbaseException, IOException {
+    void testStatus() throws SnapbaseException, IOException {
         // Create initial snapshot
         workspace.createSnapshot(testDataFile.toString(), "baseline");
         
@@ -112,12 +112,12 @@ class SnapbaseWorkspaceTest {
                                   "4,David,400\n";
         Files.write(testDataFile, updatedCsvContent.getBytes());
         
-        // Detect changes
-        String changes = workspace.detectChanges(testDataFile.toString(), "baseline");
+        // Check status
+        String changes = workspace.status(testDataFile.toString(), "baseline");
         assertNotNull(changes);
         
         // Parse JSON to verify structure
-        JsonNode changesJson = workspace.detectChangesAsJson(testDataFile.toString(), "baseline");
+        JsonNode changesJson = workspace.statusAsJson(testDataFile.toString(), "baseline");
         assertNotNull(changesJson);
     }
     
@@ -252,9 +252,9 @@ class SnapbaseWorkspaceTest {
             workspace.createSnapshot("/non/existent/file.csv", "test");
         });
         
-        // Test change detection with non-existent baseline
+        // Test status check with non-existent baseline
         assertThrows(SnapbaseException.class, () -> {
-            workspace.detectChanges(testDataFile.toString(), "non_existent_baseline");
+            workspace.status(testDataFile.toString(), "non_existent_baseline");
         });
         
         // Test query with non-existent source

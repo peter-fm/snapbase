@@ -77,18 +77,18 @@ class WorkflowTest {
         // Step 2: Update data and check changes (equivalent to: cp employees_snapshot1.csv employees.csv && snapbase status employees.csv)
         Files.write(employeesFile, EMPLOYEES_SNAPSHOT1.getBytes(StandardCharsets.UTF_8));
         
-        // Test change detection (equivalent to status command)
+        // Test status check (equivalent to status command)
         try {
-            String changes = workspace.detectChanges("employees.csv", "baseline");
+            String changes = workspace.status("employees.csv", "baseline");
             assertNotNull(changes);
             assertFalse(changes.isEmpty());
             
             // Parse as JSON to verify structure
-            JsonNode changesJson = workspace.detectChangesAsJson("employees.csv", "baseline");
+            JsonNode changesJson = workspace.statusAsJson("employees.csv", "baseline");
             assertNotNull(changesJson);
             
         } catch (Exception e) {
-            System.out.println("Change detection not fully implemented: " + e.getMessage());
+            System.out.println("Status check not fully implemented: " + e.getMessage());
         }
         
         // Step 3: Create snapshot1 (equivalent to: snapbase snapshot employees.csv --name snap1)
@@ -100,13 +100,13 @@ class WorkflowTest {
         // Step 4: Update data again (equivalent to: cp employees_snapshot2.csv employees.csv && snapbase status employees.csv)
         Files.write(employeesFile, EMPLOYEES_SNAPSHOT2.getBytes(StandardCharsets.UTF_8));
         
-        // Check changes again
+        // Check status again
         try {
-            String changes2 = workspace.detectChanges("employees.csv", "snap1");
+            String changes2 = workspace.status("employees.csv", "snap1");
             assertNotNull(changes2);
             assertFalse(changes2.isEmpty());
         } catch (Exception e) {
-            System.out.println("Second change detection not available: " + e.getMessage());
+            System.out.println("Second status check not available: " + e.getMessage());
         }
         
         // Step 5: Create snapshot2 (equivalent to: snapbase snapshot employees.csv --name snap2)

@@ -177,8 +177,8 @@ impl Workspace {
                   metadata.name, metadata.row_count, metadata.column_count))
     }
 
-    /// Detect changes between current file and a baseline snapshot
-    fn detect_changes(&self, file_path: &str, baseline: &str) -> PyResult<String> {
+    /// Check status of current file against a baseline snapshot
+    fn status(&self, file_path: &str, baseline: &str) -> PyResult<String> {
         let resolver = SnapshotResolver::new(self.workspace.clone());
         
         // Convert file path to absolute path
@@ -238,7 +238,7 @@ impl Workspace {
             &baseline_row_data,
             &current_data_info.columns,
             &current_row_data,
-        ).map_err(|e| PyRuntimeError::new_err(format!("Failed to detect changes: {}", e)))?;
+        ).map_err(|e| PyRuntimeError::new_err(format!("Failed to check status: {}", e)))?;
         
         // Convert to JSON string
         let changes_json = serde_json::to_value(&changes)

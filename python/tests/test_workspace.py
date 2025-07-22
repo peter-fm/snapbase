@@ -30,16 +30,16 @@ class TestWorkspaceOperations:
         assert "rows" in result
         assert "columns" in result
     
-    def test_detect_changes_real(self, temp_workspace, sample_csv_file, updated_csv_file):
-        """Test detecting changes (real functionality)"""
+    def test_status_real(self, temp_workspace, sample_csv_file, updated_csv_file):
+        """Test checking status against baseline (real functionality)"""
         workspace = Workspace(str(temp_workspace))
         workspace.init()
         
         # First create a baseline snapshot of the file we want to check later
         workspace.create_snapshot(updated_csv_file.name, "baseline")
         
-        # Then detect changes by comparing current state against the baseline
-        result = workspace.detect_changes(updated_csv_file.name, "baseline")
+        # Then check status by comparing current state against the baseline
+        result = workspace.status(updated_csv_file.name, "baseline")
         assert isinstance(result, str)
         # Result should be JSON with change detection data
         import json
@@ -182,6 +182,6 @@ class TestWorkspaceErrors:
         with pytest.raises(RuntimeError, match="File not found"):
             workspace.create_snapshot("/nonexistent/file.csv", "test")
         
-        # Detect changes with non-existent baseline (should raise error)
+        # Check status with non-existent baseline (should raise error)
         with pytest.raises(RuntimeError, match="Failed to resolve baseline snapshot"):
-            workspace.detect_changes("/nonexistent/file.csv", "nonexistent_baseline")
+            workspace.status("/nonexistent/file.csv", "nonexistent_baseline")

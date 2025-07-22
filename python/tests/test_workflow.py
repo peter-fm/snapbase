@@ -57,9 +57,9 @@ class TestCompleteWorkflow:
         employees_file.write_text(self.employees_snapshot1)
         
         # Check status (equivalent to: snapbase status employees.csv)
-        # Note: Python API doesn't have direct status method, but we can use detect_changes
+        # Note: Python API now has status method
         try:
-            changes = workspace.detect_changes("employees.csv", "baseline")
+            changes = workspace.status("employees.csv", "baseline")
             assert isinstance(changes, str)
             # Should detect changes (Bob removed, Eve salary changed)
             changes_data = json.loads(changes)
@@ -78,7 +78,7 @@ class TestCompleteWorkflow:
         
         # Check status again
         try:
-            changes2 = workspace.detect_changes("employees.csv", "snap1")
+            changes2 = workspace.status("employees.csv", "snap1")
             assert isinstance(changes2, str)
             # Should detect changes (Bob added back, Diana removed, Eve salary reverted)
         except Exception as e:

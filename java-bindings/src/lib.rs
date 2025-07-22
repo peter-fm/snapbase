@@ -211,9 +211,9 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
     }
 }
 
-/// Detect changes between current file and baseline
+/// Check status of current file against baseline
 #[no_mangle]
-pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDetectChanges<'local>(
+pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     handle: jlong,
@@ -346,7 +346,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDetectChanges<'
     ) {
         Ok(changes) => changes,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to detect changes: {e}"));
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to check status: {e}"));
             return std::ptr::null_mut();
         }
     };
