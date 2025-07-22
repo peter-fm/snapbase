@@ -19,6 +19,7 @@ use snapbase_core::snapshot;
 use snapbase_core::hash;
 use snapbase_core::path_utils;
 use snapbase_core::sql;
+use snapbase_core::export::{UnifiedExporter, ExportOptions, ExportFormat};
 use std::path::Path;
 
 /// Filter row data to include only original columns (exclude snapbase metadata columns)
@@ -146,7 +147,7 @@ fn init_command(workspace_path: Option<&Path>, from_global: bool) -> Result<()> 
     })
 }
 
-/// Export snapshot data to a file
+/// Export snapshot data to a file using unified export functionality
 fn export_command(
     workspace_path: Option<&Path>,
     input: &str,
@@ -157,7 +158,6 @@ fn export_command(
     force: bool,
 ) -> Result<()> {
     let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
-    let resolver = SnapshotResolver::new(workspace.clone());
 
     // Validate that exactly one target option is provided
     match (to, to_date) {
@@ -174,95 +174,37 @@ fn export_command(
         _ => {} // Exactly one is provided, which is valid
     }
 
-    // Resolve target snapshot
-    let target_snapshot = if let Some(snapshot_name) = to {
-        resolver.resolve_by_name_for_source(snapshot_name, Some(input))?
-    } else if let Some(date_str) = to_date {
-        resolver.resolve_by_date_for_source(date_str, Some(input))?
-    } else {
-        unreachable!("Should have been caught by validation above")
+    // Build export options
+    let mut options = ExportOptions {
+        include_header: true,
+        delimiter: ',',
+        force,
+        snapshot_name: to.map(|s| s.to_string()),
+        snapshot_date: to_date.map(|s| s.to_string()),
     };
 
-    println!("📤 Exporting snapshot '{}' from '{}' to '{}'...", target_snapshot.name, input, output_file);
-
-    // Load target snapshot data from Hive storage
-    let rt = tokio::runtime::Runtime::new()?;
-    
-    // Get metadata to determine schema
-    let metadata = if let Some(preloaded) = target_snapshot.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &target_snapshot.json_path {
-        let metadata_data = rt.block_on(async {
-            workspace.storage().read_file(json_path).await
-        })?;
-        serde_json::from_slice::<snapshot::SnapshotMetadata>(&metadata_data)?
-    } else {
-        return Err(SnapbaseError::SnapshotNotFound {
-            name: target_snapshot.name.clone(),
-        });
-    };
-    
-    
-    let target_schema = metadata.columns.clone();
-    
-    // Load row data from Hive storage using DuckDB
-    let data_path = target_snapshot.data_path.as_ref().ok_or_else(|| {
-        SnapbaseError::archive("Target snapshot has no data path")
-    })?;
-    
-    let mut data_processor = DataProcessor::new_with_workspace(&workspace)?;
-    let target_row_data = rt.block_on(async {
-        // For local storage, make path absolute relative to workspace .snapbase directory
-        let absolute_data_path = if data_path.starts_with('/') {
-            data_path.to_string()
-        } else {
-            workspace.root.join(".snapbase").join(data_path).to_string_lossy().to_string()
-        };
-        data_processor.load_cloud_storage_data(&absolute_data_path, &workspace).await
-    })?;
+    let output_path = Path::new(output_file);
     
     // Determine output format from file extension
-    let output_path = Path::new(output_file);
-    let output_format = determine_output_format(output_path)?;
+    let export_format = ExportFormat::from_extension(output_path)?;
     
-    // Check if output file already exists
-    if output_path.exists() && !force {
-        return Err(SnapbaseError::invalid_input(format!(
-            "Output file '{output_file}' already exists. Use --force to overwrite."
-        )));
-    }
-
-    // Show what will be exported
+    // Show what will be exported in dry-run mode
     if dry_run {
         println!("🔍 Dry run - would export:");
         println!("  Source: {input}");
-        println!("  Snapshot: {}", target_snapshot.name);
-        println!("  Output: {} ({})", output_file, match output_format {
-            OutputFormat::Csv => "CSV format",
-            OutputFormat::Parquet => "Parquet format",
-        });
-        println!("  Rows: {}", target_row_data.len());
-        println!("  Columns: {}", target_schema.len());
+        if let Some(snapshot_name) = &options.snapshot_name {
+            println!("  Snapshot: {snapshot_name}");
+        }
+        if let Some(snapshot_date) = &options.snapshot_date {
+            println!("  Snapshot date: {snapshot_date}");
+        }
+        println!("  Output: {} ({:?} format)", output_file, export_format);
         return Ok(());
     }
 
-    // Ask for confirmation if not forced
-    if !force {
-        println!("📋 Export details:");
-        println!("  Snapshot: {}", target_snapshot.name);
-        println!("  Output: {} ({})", output_file, match output_format {
-            OutputFormat::Csv => "CSV format",
-            OutputFormat::Parquet => "Parquet format",
-        });
-        println!("  Rows: {}", target_row_data.len());
-        println!("  Columns: {}", target_schema.len());
-        
-        if output_path.exists() {
-            println!("\n⚠️  Output file exists and will be overwritten. Continue? (y/N)");
-        } else {
-            println!("\nContinue? (y/N)");
-        }
-        
+    // Ask for confirmation if not forced and file exists
+    if output_path.exists() && !force {
+        println!("⚠️  Output file '{}' already exists. Continue? (y/N)", output_file);
         let mut user_input = String::new();
         std::io::stdin().read_line(&mut user_input)?;
         
@@ -270,83 +212,22 @@ fn export_command(
             println!("❌ Export cancelled.");
             return Ok(());
         }
+        // Update force flag since user confirmed
+        options.force = true;
     }
 
-    // Export the data
-    match output_format {
-        OutputFormat::Csv => {
-            let csv_content = create_csv_content(&target_schema, &target_row_data)?;
-            std::fs::write(output_path, csv_content)?;
-        }
-        OutputFormat::Parquet => {
-            export_to_parquet(&target_schema, &target_row_data, output_path, &workspace)?;
-        }
-    }
+    println!("📤 Exporting data using unified export engine...");
+
+    // Use the unified exporter
+    let mut exporter = UnifiedExporter::new(workspace)?;
+    exporter.export(input, output_path, options)?;
 
     println!("✅ Export completed successfully!");
-    println!("📄 Snapshot '{}' exported to '{}'", target_snapshot.name, output_file);
+    println!("📄 Data exported to '{}'", output_file);
 
     Ok(())
 }
 
-/// Output format for export command
-#[derive(Debug, Clone, PartialEq)]
-enum OutputFormat {
-    Csv,
-    Parquet,
-}
-
-/// Determine output format from file extension
-fn determine_output_format(path: &Path) -> Result<OutputFormat> {
-    let extension = path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase());
-    
-    match extension.as_deref() {
-        Some("csv") => Ok(OutputFormat::Csv),
-        Some("parquet") => Ok(OutputFormat::Parquet),
-        Some(ext) => Err(SnapbaseError::invalid_input(format!(
-            "Unsupported output format: '{ext}'. Supported formats: csv, parquet"
-        ))),
-        None => Err(SnapbaseError::invalid_input(
-            "Output file must have an extension (.csv or .parquet)".to_string()
-        )),
-    }
-}
-
-/// Export data to Parquet format
-fn export_to_parquet(
-    schema: &[hash::ColumnInfo],
-    rows: &[Vec<String>],
-    output_path: &Path,
-    workspace: &SnapbaseWorkspace,
-) -> Result<()> {
-    use std::fs::File;
-    use std::io::Write;
-    
-    // Create a temporary CSV file and use DuckDB to convert to Parquet
-    let temp_csv = tempfile::NamedTempFile::new()?;
-    let csv_content = create_csv_content(schema, rows)?;
-    
-    // Write CSV to temp file
-    {
-        let mut file = File::create(temp_csv.path())?;
-        file.write_all(csv_content.as_bytes())?;
-    }
-    
-    // Use DuckDB to convert CSV to Parquet
-    let data_processor = DataProcessor::new_with_workspace(workspace)?;
-    let temp_csv_path = temp_csv.path().to_string_lossy();
-    let output_path_str = output_path.to_string_lossy();
-    
-    let sql = format!(
-        "COPY (SELECT * FROM read_csv_auto('{temp_csv_path}')) TO '{output_path_str}' (FORMAT PARQUET)"
-    );
-    
-    data_processor.connection.execute(&sql, [])?;
-    
-    Ok(())
-}
 
 /// Validate that a file path is within the workspace directory
 fn validate_file_within_workspace(file_path: &Path, workspace: &SnapbaseWorkspace) -> Result<()> {
@@ -377,45 +258,6 @@ fn validate_file_within_workspace(file_path: &Path, workspace: &SnapbaseWorkspac
     Ok(())
 }
 
-/// Create CSV content from schema and row data
-pub fn create_csv_content(schema: &[hash::ColumnInfo], rows: &[Vec<String>]) -> Result<String> {
-    let mut content = String::new();
-    
-    // Filter out snapbase metadata columns - only keep original data columns
-    let original_columns: Vec<(usize, &hash::ColumnInfo)> = schema
-        .iter()
-        .enumerate()
-        .filter(|(_, col)| {
-            !col.name.starts_with("__snapbase_") && 
-            col.name != "snapshot_name" && 
-            col.name != "snapshot_timestamp"
-        })
-        .collect();
-    
-    // Write header (only original columns)
-    let headers: Vec<&str> = original_columns.iter().map(|(_, col)| col.name.as_str()).collect();
-    content.push_str(&headers.join(","));
-    content.push('\n');
-    
-    // Write rows (only original column values)
-    let empty_string = String::new();
-    for row in rows {
-        let mut row_values = Vec::new();
-        for &(original_index, _) in &original_columns {
-            let value = row.get(original_index).unwrap_or(&empty_string);
-            // Escape CSV values if they contain commas or quotes
-            if value.contains(',') || value.contains('"') || value.contains('\n') {
-                row_values.push(format!("\"{}\"", value.replace('"', "\"\"")));
-            } else {
-                row_values.push(value.clone());
-            }
-        }
-        content.push_str(&row_values.join(","));
-        content.push('\n');
-    }
-    
-    Ok(content)
-}
 
 /// Create a snapshot
 fn snapshot_command(

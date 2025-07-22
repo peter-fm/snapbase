@@ -22,6 +22,7 @@ pub mod query_engine;
 pub mod naming;
 pub mod path_utils;
 pub mod database;
+pub mod export;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
@@ -34,6 +35,7 @@ pub use snapshot::{SnapshotMetadata, SnapshotCreator};
 pub use change_detection::{ChangeDetector, ChangeDetectionResult};
 pub use storage::StorageBackend;
 pub use config::Config;
+pub use export::{UnifiedExporter, ExportFormat, ExportOptions};
 
 /// Current format version for snapbase files
 pub const FORMAT_VERSION: &str = "1.0.0";

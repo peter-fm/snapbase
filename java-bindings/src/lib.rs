@@ -20,6 +20,7 @@ use snapbase_core::{
     query::SnapshotQueryEngine,
     naming::SnapshotNamer,
     config::get_snapshot_config,
+    UnifiedExporter, ExportOptions, ExportFormat,
 };
 
 /// Wrapper for SnapbaseWorkspace that can be safely passed through JNI
@@ -858,7 +859,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
     }
 }
 
-/// Export snapshot data to a file
+/// Export snapshot data to a file using unified export functionality
 #[no_mangle]
 pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeExport<'local>(
     mut env: JNIEnv<'local>,
@@ -897,125 +898,46 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeExport<'local>(
     
     let force_bool = force == JNI_TRUE;
     
-    // Resolve target snapshot
-    let resolver = SnapshotResolver::new(workspace_handle.workspace.clone());
-    let target_snapshot = match resolver.resolve_by_name_for_source(&to_str, Some(&source_str)) {
-        Ok(snapshot) => snapshot,
-        Err(e) => {
-            let error_msg = format!("Failed to resolve target snapshot: {}", e);
-            let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
-            return std::ptr::null_mut();
-        }
+    // Build export options
+    let options = ExportOptions {
+        include_header: true,
+        delimiter: ',',
+        force: force_bool,
+        snapshot_name: Some(to_str.clone()),
+        snapshot_date: None,
     };
-    
-    // Load target snapshot data
-    let metadata = if let Some(preloaded) = target_snapshot.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &target_snapshot.json_path {
-        let metadata_data = match workspace_handle.runtime.block_on(async {
-            workspace_handle.workspace.storage().read_file(json_path).await
-        }) {
-            Ok(data) => data,
-            Err(e) => {
-                let error_msg = format!("Failed to read target metadata: {}", e);
-                let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
-                return std::ptr::null_mut();
-            }
-        };
-        match serde_json::from_slice::<SnapshotMetadata>(&metadata_data) {
-            Ok(meta) => meta,
-            Err(e) => {
-                let error_msg = format!("Failed to parse target metadata: {}", e);
-                let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
-                return std::ptr::null_mut();
-            }
-        }
-    } else {
-        let _ = env.throw_new("com/snapbase/SnapbaseException", "Target snapshot not found");
-        return std::ptr::null_mut();
-    };
-    
-    let target_schema = metadata.columns.clone();
-    
-    // Load row data from storage
-    let data_path = match target_snapshot.data_path.as_ref() {
-        Some(path) => path,
-        None => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Target snapshot has no data path");
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let mut data_processor = match DataProcessor::new_with_workspace(&workspace_handle.workspace) {
-        Ok(processor) => processor,
-        Err(e) => {
-            let error_msg = format!("Failed to create data processor: {}", e);
-            let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let target_row_data = match workspace_handle.runtime.block_on(async {
-        // Pass data_path directly - load_cloud_storage_data handles get_duckdb_path internally
-        data_processor.load_cloud_storage_data(data_path, &workspace_handle.workspace).await
-    }) {
-        Ok(data) => data,
-        Err(e) => {
-            let error_msg = format!("Failed to load target data: {}", e);
-            let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
-            return std::ptr::null_mut();
-        }
-    };
-    
-    // Check if output file exists
+
     let output_path = Path::new(&output_str);
-    if output_path.exists() && !force_bool {
-        let error_msg = format!("Output file '{}' already exists. Use force=true to overwrite.", output_str);
-        let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
-        return std::ptr::null_mut();
-    }
     
-    // Create CSV content (simplified - always export as CSV for now)
-    let mut csv_content = String::new();
+    // Determine output format for reporting
+    let export_format = match ExportFormat::from_extension(output_path) {
+        Ok(format) => format,
+        Err(e) => {
+            let error_msg = format!("Invalid output format: {}", e);
+            let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
+            return std::ptr::null_mut();
+        }
+    };
+
+    // Use the unified exporter
+    let mut exporter = match UnifiedExporter::new(workspace_handle.workspace.clone()) {
+        Ok(exp) => exp,
+        Err(e) => {
+            let error_msg = format!("Failed to create exporter: {}", e);
+            let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
+            return std::ptr::null_mut();
+        }
+    };
     
-    // Filter out snapbase metadata columns - only keep original data columns
-    let original_columns: Vec<(usize, &snapbase_core::hash::ColumnInfo)> = target_schema
-        .iter()
-        .enumerate()
-        .filter(|(_, col)| {
-            !col.name.starts_with("__snapbase_") && 
-            col.name != "snapshot_name" && 
-            col.name != "snapshot_timestamp"
-        })
-        .collect();
-    
-    // Write header
-    let headers: Vec<&str> = original_columns.iter().map(|(_, col)| col.name.as_str()).collect();
-    csv_content.push_str(&headers.join(","));
-    csv_content.push('\n');
-    
-    // Write data rows
-    for row in &target_row_data {
-        let row_values: Vec<String> = original_columns
-            .iter()
-            .map(|(idx, _)| {
-                row.get(*idx).cloned().unwrap_or_default()
-            })
-            .collect();
-        csv_content.push_str(&row_values.join(","));
-        csv_content.push('\n');
-    }
-    
-    // Write to file
-    if let Err(e) = std::fs::write(output_path, csv_content) {
-        let error_msg = format!("Failed to write export file: {}", e);
+    if let Err(e) = exporter.export(&source_str, output_path, options) {
+        let error_msg = format!("Export failed: {}", e);
         let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
         return std::ptr::null_mut();
     }
     
     let result_message = format!(
-        "Exported snapshot '{}' from '{}' to '{}' ({} rows, {} columns)",
-        to_str, source_str, output_str, target_row_data.len(), target_schema.len()
+        "Exported snapshot '{}' from '{}' to '{}' ({:?} format)",
+        to_str, source_str, output_str, export_format
     );
     
     match string_to_jstring(&mut env, &result_message) {

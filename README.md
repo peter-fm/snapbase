@@ -76,8 +76,6 @@ snapbase snapshot data.csv --name updated
 snapbase query data.csv "select * from data where snapshot_name = 'initial'" 
 # Revert csv back
 snapbase export data.csv --to initial --file data.csv --force
-
-
 ```
 
 **Python:**
