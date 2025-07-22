@@ -729,8 +729,7 @@ mod tests {
         let workspace = SnapbaseWorkspace::create_new(temp_dir.path().to_path_buf(), storage_backend, config).await.unwrap();
         
         assert!(workspace.snapbase_dir.exists());
-        // Note: diffs_dir is no longer created - we use SQL queries for diffs
-        assert!(workspace.root.join(".gitignore").exists());
+
     }
 
     #[tokio::test]

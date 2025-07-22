@@ -304,9 +304,8 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDetectChanges<'
     };
     
     // Convert storage path to DuckDB-accessible path
-    let duckdb_data_path = workspace_handle.workspace.storage().get_duckdb_path(data_path);
     let baseline_row_data = match workspace_handle.runtime.block_on(async {
-        data_processor.load_cloud_storage_data(&duckdb_data_path, &workspace_handle.workspace).await
+        data_processor.load_cloud_storage_data(&data_path, &workspace_handle.workspace).await
     }) {
         Ok(data) => data,
         Err(e) => {
@@ -697,20 +696,155 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
         }
     };
     
-    let _resolver = SnapshotResolver::new(workspace_handle.workspace.clone());
+    let resolver = SnapshotResolver::new(workspace_handle.workspace.clone());
     
-    // For now, return a simple message indicating diff is not fully implemented
-    let placeholder_result = serde_json::json!({
-        "message": format!("Diff between {} and {} for source {} - full implementation pending", from_str, to_str, source_str),
-        "from_snapshot": from_str,
-        "to_snapshot": to_str,
-        "source": source_str
-    });
+    // Resolve both snapshots
+    let from_resolved = match resolver.resolve_by_name_for_source(&from_str, Some(&source_str)) {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to resolve from snapshot '{}': {}", from_str, e));
+            return std::ptr::null_mut();
+        }
+    };
     
-    let result_str = match serde_json::to_string_pretty(&placeholder_result) {
+    let to_resolved = match resolver.resolve_by_name_for_source(&to_str, Some(&source_str)) {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to resolve to snapshot '{}': {}", to_str, e));
+            return std::ptr::null_mut();
+        }
+    };
+
+    // Create async runtime for data loading operations  
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create runtime: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+    
+    // Load metadata for both snapshots
+    let from_metadata = if let Some(preloaded) = from_resolved.get_metadata() {
+        preloaded.clone()
+    } else if let Some(json_path) = &from_resolved.json_path {
+        let metadata_data = match rt.block_on(async {
+            workspace_handle.workspace.storage().read_file(json_path).await
+        }) {
+            Ok(data) => data,
+            Err(e) => {
+                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to read from metadata: {}", e));
+                return std::ptr::null_mut();
+            }
+        };
+        match serde_json::from_slice::<SnapshotMetadata>(&metadata_data) {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to parse from metadata: {}", e));
+                return std::ptr::null_mut();
+            }
+        }
+    } else {
+        let _ = env.throw_new("com/snapbase/SnapbaseException", "From snapshot not found");
+        return std::ptr::null_mut();
+    };
+    
+    let to_metadata = if let Some(preloaded) = to_resolved.get_metadata() {
+        preloaded.clone()
+    } else if let Some(json_path) = &to_resolved.json_path {
+        let metadata_data = match rt.block_on(async {
+            workspace_handle.workspace.storage().read_file(json_path).await
+        }) {
+            Ok(data) => data,
+            Err(e) => {
+                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to read to metadata: {}", e));
+                return std::ptr::null_mut();
+            }
+        };
+        match serde_json::from_slice::<SnapshotMetadata>(&metadata_data) {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to parse to metadata: {}", e));
+                return std::ptr::null_mut();
+            }
+        }
+    } else {
+        let _ = env.throw_new("com/snapbase/SnapbaseException", "To snapshot not found");
+        return std::ptr::null_mut();
+    };
+    
+    // Load data for both snapshots
+    let mut data_processor = match DataProcessor::new_with_workspace(&workspace_handle.workspace) {
+        Ok(processor) => processor,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create data processor: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+    
+    let from_data_path = match from_resolved.data_path.as_ref() {
+        Some(path) => path,
+        None => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "From snapshot has no data path");
+            return std::ptr::null_mut();
+        }
+    };
+    
+    let to_data_path = match to_resolved.data_path.as_ref() {
+        Some(path) => path,
+        None => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "To snapshot has no data path");
+            return std::ptr::null_mut();
+        }
+    };
+    
+    let from_row_data = match rt.block_on(async {
+        data_processor.load_cloud_storage_data(&from_data_path, &workspace_handle.workspace).await
+    }) {
+        Ok(data) => data,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to load from data: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+    
+    let to_row_data = match rt.block_on(async {
+        data_processor.load_cloud_storage_data(&to_data_path, &workspace_handle.workspace).await
+    }) {
+        Ok(data) => data,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to load to data: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+    
+    // Perform change detection
+    let changes = match ChangeDetector::detect_changes(
+        &from_metadata.columns,
+        &from_row_data,
+        &to_metadata.columns,
+        &to_row_data,
+    ) {
+        Ok(changes) => changes,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to detect changes: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+    
+    // Convert to JSON
+    let diff_json = match serde_json::to_value(&changes) {
+        Ok(json) => json,
+        Err(e) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to serialize diff: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+    
+    let result_str = match serde_json::to_string_pretty(&diff_json) {
         Ok(s) => s,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to serialize diff: {e}"));
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to format diff: {}", e));
             return std::ptr::null_mut();
         }
     };
