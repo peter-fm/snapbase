@@ -43,9 +43,7 @@ curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-l
 chmod +x snapbase && sudo mv snapbase /usr/local/bin/
 
 # From source
-git clone https://github.com/peter-fm/snapbase.git
-cd snapbase/cli
-cargo install --path .
+cargo install --git https://github.com/peter-fm/snapbase.git
 ```
 
 ### Python Installation (uv)

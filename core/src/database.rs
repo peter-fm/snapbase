@@ -191,21 +191,10 @@ impl DatabaseConnection {
     
     /// Create a SQL query to snapshot a table
     pub fn create_table_snapshot_query(&self, table: &TableInfo) -> String {
-        match self.config.db_type {
-            DatabaseType::Mysql => {
-                // Use MySQL backticks for identifier quoting
-                format!("SELECT * FROM `{}`", table.name)
-            }
-            DatabaseType::Postgresql => {
-                if let Some(schema) = &table.schema {
-                    format!("SELECT * FROM \"{}\".\"{}\"", schema, table.name)
-                } else {
-                    format!("SELECT * FROM \"{}\"", table.name)
-                }
-            }
-            DatabaseType::Sqlite => {
-                format!("SELECT * FROM \"{}\"", table.name)
-            }
+        if let Some(schema) = &table.schema {
+            format!("SELECT * FROM {}.{}", schema, table.name)
+        } else {
+            format!("SELECT * FROM {}", table.name)
         }
     }
     

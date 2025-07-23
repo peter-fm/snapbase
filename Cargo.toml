@@ -46,6 +46,9 @@ uuid = { version = "1.6", features = ["v4"] }
 # Random number generation
 rand = "0.8"
 
+# Regular expressions
+regex = "1.10"
+
 # Error handling
 anyhow = "1.0"
 thiserror = "1.0"

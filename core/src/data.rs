@@ -67,6 +67,7 @@ pub struct DataProcessor {
     cached_columns: Option<Vec<ColumnInfo>>,
     streaming_query: Option<String>,
     database_type: Option<DatabaseType>,
+    database_name: Option<String>,
 }
 
 /// Database type for identifier quoting
@@ -82,16 +83,6 @@ impl DataProcessor {
     /// Create a new data processor with default settings
     pub fn new() -> Result<Self> {
         Self::new_with_config()
-    }
-
-    /// Get database-specific identifier quoting
-    fn quote_identifier(&self, identifier: &str) -> String {
-        match &self.database_type {
-            Some(DatabaseType::MySQL) => format!("`{identifier}`"),
-            Some(DatabaseType::PostgreSQL) => format!("\"{identifier}\""),
-            Some(DatabaseType::SQLite) => format!("\"{identifier}\""),
-            Some(DatabaseType::DuckDB) | None => format!("\"{identifier}\""),
-        }
     }
 
     /// Detect database type from connection string
@@ -110,6 +101,49 @@ impl DataProcessor {
         }
     }
 
+    /// Extract database name from MySQL connection string
+    fn extract_database_name(connection_string: &str) -> Option<String> {
+        // Look for database= pattern in MySQL connection strings
+        if let Some(start) = connection_string.find("database=") {
+            let after_db = &connection_string[start + 9..]; // Skip "database="
+            // Find the end (space, semicolon, or end of string)
+            let end = after_db.find(&[' ', ';', '\'', '"'][..]).unwrap_or(after_db.len());
+            Some(after_db[..end].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Transform SQL query to use fully qualified table names for MySQL
+    fn transform_sql_for_mysql(&self, sql: &str) -> String {
+        if let (Some(DatabaseType::MySQL), Some(ref db_name)) = (&self.database_type, &self.database_name) {
+            // For MySQL connections, transform unqualified table references to fully qualified ones
+            // This prevents DuckDB's inconsistent identifier transformation
+            
+            // Simple pattern matching for common SQL patterns
+            // This handles basic cases like "FROM table_name" -> "FROM db_name.table_name"
+            use regex::Regex;
+            
+            // Match FROM clauses with unqualified table names
+            let from_pattern = Regex::new(r"\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap();
+            let transformed = from_pattern.replace_all(sql, |caps: &regex::Captures| {
+                let table_name = &caps[1];
+                // Only transform if it's not already qualified (doesn't contain a dot)
+                if table_name.contains('.') {
+                    caps[0].to_string() // Already qualified, leave as is
+                } else {
+                    format!("FROM {}.{}", db_name, table_name)
+                }
+            });
+            
+            transformed.to_string()
+        } else {
+            // For non-MySQL connections, return SQL unchanged
+            sql.to_string()
+        }
+    }
+
+
     /// Create a new data processor with workspace configuration
     pub fn new_with_workspace(workspace: &crate::workspace::SnapbaseWorkspace) -> Result<Self> {
         let connection = crate::query_engine::create_configured_connection(workspace)?;
@@ -119,6 +153,7 @@ impl DataProcessor {
             cached_columns: None,
             streaming_query: None,
             database_type: None,
+            database_name: None,
         })
     }
 
@@ -171,6 +206,7 @@ impl DataProcessor {
             cached_columns: None,
             streaming_query: None,
             database_type: None,
+            database_name: None,
         })
     }
 
@@ -241,6 +277,11 @@ impl DataProcessor {
             // Detect database type from connection string
             self.database_type = Self::detect_database_type(&connection_string);
             
+            // Extract database name for MySQL connections
+            if matches!(self.database_type, Some(DatabaseType::MySQL)) {
+                self.database_name = Self::extract_database_name(&connection_string);
+            }
+            
             self.connection.execute(&connection_string, [])
                 .map_err(|e| crate::error::SnapbaseError::data_processing(
                     format!("Failed to execute connection string '{connection_string}': {e}")
@@ -305,8 +346,11 @@ impl DataProcessor {
             ));
         }
         
+        // Transform the select query to use fully qualified table names for MySQL
+        let transformed_query = self.transform_sql_for_mysql(select_query.trim());
+        
         // First, get the row count and column info without materializing all data
-        let count_query = format!("SELECT COUNT(*) FROM ({})", select_query.trim());
+        let count_query = format!("SELECT COUNT(*) FROM ({})", transformed_query);
         let row_count: u64 = self.connection
             .prepare(&count_query)
             .map_err(|e| crate::error::SnapbaseError::data_processing(
@@ -318,10 +362,9 @@ impl DataProcessor {
             ))?;
         
         // Get column information by creating a temporary view with LIMIT 0
-        let quoted_table_name = self.quote_identifier("temp_schema_view");
         let temp_view_sql = format!(
-            "CREATE OR REPLACE VIEW {quoted_table_name} AS SELECT * FROM ({}) AS query_result LIMIT 0",
-            select_query.trim()
+            "CREATE OR REPLACE VIEW temp_schema_view AS SELECT * FROM ({}) AS query_result LIMIT 0",
+            transformed_query
         );
         
         self.connection.execute(&temp_view_sql, [])
@@ -330,19 +373,19 @@ impl DataProcessor {
             ))?;
         
         // Get column information from the temporary view and cache it
-        let columns = self.get_column_info_from_view(&quoted_table_name)?;
+        let columns = self.get_column_info_from_view("schema_temp_view")?;
         
         // Cache the columns for streaming queries since we won't have data_view
         self.cached_columns = Some(columns.clone());
         
         // Clean up temporary view
-        self.connection.execute(&format!("DROP VIEW IF EXISTS {quoted_table_name}"), [])
+        self.connection.execute("DROP VIEW IF EXISTS schema_temp_view", [])
             .map_err(|e| crate::error::SnapbaseError::data_processing(
                 format!("Failed to drop temporary view: {e}")
             ))?;
         
-        // Store the original SELECT query for streaming use
-        self.streaming_query = Some(select_query.trim().to_string());
+        // Store the transformed SELECT query for streaming use
+        self.streaming_query = Some(transformed_query);
         
         Ok(DataInfo {
             source: file_path.to_path_buf(),
@@ -1268,7 +1311,7 @@ impl DataProcessor {
         // Use natural file order - no ORDER BY clause needed
         // DuckDB preserves the original row order from CSV files
         let column_list = columns.iter()
-            .map(|c| self.quote_identifier(&c.name))
+            .map(|c| c.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
         
@@ -1340,7 +1383,7 @@ impl DataProcessor {
         // Execute the full query once and stream through results (no chunking needed)
 
         let column_list = columns.iter()
-            .map(|c| self.quote_identifier(&c.name))
+            .map(|c| c.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -2157,27 +2200,4 @@ mod tests {
         assert!(matches!(db_type, Some(DatabaseType::DuckDB)));
     }
 
-    #[test]
-    fn test_identifier_quoting() {
-        // Test MySQL quoting
-        let mut processor = DataProcessor::new().unwrap();
-        processor.database_type = Some(DatabaseType::MySQL);
-        assert_eq!(processor.quote_identifier("comments"), "`comments`");
-        
-        // Test PostgreSQL quoting
-        processor.database_type = Some(DatabaseType::PostgreSQL);
-        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
-        
-        // Test SQLite quoting
-        processor.database_type = Some(DatabaseType::SQLite);
-        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
-        
-        // Test DuckDB quoting (default)
-        processor.database_type = Some(DatabaseType::DuckDB);
-        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
-        
-        // Test None (default to DuckDB)
-        processor.database_type = None;
-        assert_eq!(processor.quote_identifier("comments"), "\"comments\"");
-    }
 }

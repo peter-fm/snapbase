@@ -41,6 +41,9 @@ uuid = { workspace = true }
 # Random number generation
 rand = { workspace = true }
 
+# Regular expressions
+regex = { workspace = true }
+
 # Error handling
 anyhow = { workspace = true }
 thiserror = { workspace = true }

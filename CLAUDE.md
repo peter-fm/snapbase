@@ -195,6 +195,40 @@ uv run python <args>
 - Comprehensive error messages with context
 - Input validation and workspace boundary checks
 
+### DuckDB MySQL Integration Issues
+**Important: Known identifier quoting limitations when using DuckDB with MySQL connections**
+
+Testing revealed critical limitations in DuckDB's MySQL connector that affect SQL query execution:
+
+#### Key Findings from DuckDB CLI Testing:
+1. **DuckDB cannot parse MySQL backticks**: Any query containing backticks (`` `identifier` ``) fails with "syntax error at or near `"
+2. **DuckDB handles PostgreSQL double quotes correctly**: Queries with `"identifier"` work fine
+3. **DuckDB inconsistently transforms identifiers**: When creating views/tables, DuckDB may:
+   - Transform view names to MySQL backticks: `temp_view` → `` `temp_view` ``
+   - Transform table references to PostgreSQL quotes: `table` → `"table"`
+   - This creates mixed quoting that MySQL rejects
+
+#### Problematic Query Pattern:
+```sql
+-- DuckDB generates this mixed syntax which fails:
+CREATE VIEW `temp_schema_view` AS SELECT * FROM mysql_db."comments"
+--           ↑ MySQL backticks        ↑ PostgreSQL quotes
+```
+
+#### Solution Strategy:
+- **Avoid all identifier quoting** when possible with MySQL connections
+- Let DuckDB handle transformation consistently
+- Queries without quotes work reliably: `mysql_db.comments` ✅
+- Mixed quoting patterns fail: `` `view` `` + `"table"` ❌
+
+#### Test Results Summary:
+- ✅ `SELECT COUNT(*) FROM mysql_db.comments` (no quotes)
+- ✅ `SELECT COUNT(*) FROM mysql_db."comments"` (PostgreSQL quotes)
+- ❌ `SELECT COUNT(*) FROM mysql_db.\`comments\`` (MySQL backticks - DuckDB parser error)
+- ❌ Mixed quoting in CREATE VIEW statements (MySQL syntax error)
+
+**Recommendation**: When implementing MySQL support, use unquoted identifiers where possible to avoid DuckDB's inconsistent identifier transformation behavior.
+
 ## Test Execution Notes
 
 - Use `uv run test` for tests

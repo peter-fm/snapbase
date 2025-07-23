@@ -47,10 +47,7 @@ Visit the [releases page](https://github.com/peter-fm/snapbase/releases) to down
 ### From Source
 
 ```bash
-# Install
-git clone https://github.com/peter-fm/snapbase.git
-cd snapbase/cli
-cargo install --path .
+cargo install --git https://github.com/peter-fm/snapbase.git
 ```
 
 ### Prerequisites
