@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+[![Latest Release](https://img.shields.io/github/v/release/peter-fm/snapbase?label=latest%20release)](https://github.com/peter-fm/snapbase/releases/latest)
+
 A queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
 
 ## Features
@@ -41,12 +43,14 @@ curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-l
 chmod +x snapbase && sudo mv snapbase /usr/local/bin/
 
 # From source
-cargo install --git https://github.com/peter-fm/snapbase
+git clone https://github.com/peter-fm/snapbase.git
+cd snapbase/cli
+cargo install --path .
 ```
 
-### Python Installation
+### Python Installation (uv)
 ```bash
-uv add git+shttps://github.com/peter-fm/snapbase.git
+uv add install "git+https://github.com/peter-fm/snapbase.git@main#subdirectory=python"
 ```
 
 ### Java Installation

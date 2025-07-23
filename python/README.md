@@ -6,9 +6,7 @@ Python bindings for Snapbase - a queryable time machine for your structured data
 
 ## Features
 
-
-🚀 **Zero-Copy Arrow Performance**: Ultra-fast querying with Apache Arrow integration
-✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
+✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata    
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
 📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
 ☁️ **Cloud storage support** - Store snapshots locally or in S3  
@@ -19,7 +17,7 @@ Python bindings for Snapbase - a queryable time machine for your structured data
 
 ### From PyPI using uv
 ```bash
-uv add git+shttps://github.com/peter-fm/snapbase.git
+uv pip install "git+https://github.com/peter-fm/snapbase.git@main#subdirectory=python"
 ```
 
 ### From Source

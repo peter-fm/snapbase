@@ -193,8 +193,8 @@ impl DatabaseConnection {
     pub fn create_table_snapshot_query(&self, table: &TableInfo) -> String {
         match self.config.db_type {
             DatabaseType::Mysql => {
-                // Use standard SQL identifiers for DuckDB compatibility
-                format!("SELECT * FROM \"{}\"", table.name)
+                // Use MySQL backticks for identifier quoting
+                format!("SELECT * FROM `{}`", table.name)
             }
             DatabaseType::Postgresql => {
                 if let Some(schema) = &table.schema {

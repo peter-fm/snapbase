@@ -47,8 +47,10 @@ Visit the [releases page](https://github.com/peter-fm/snapbase/releases) to down
 ### From Source
 
 ```bash
-# Install (includes all dependencies)
-cargo install --git https://github.com/peter-fm/snapbase
+# Install
+git clone https://github.com/peter-fm/snapbase.git
+cd snapbase/cli
+cargo install --path .
 ```
 
 ### Prerequisites
@@ -95,28 +97,6 @@ snapbase list
 
 ## 📖 Usage
 
-### Python Library
-
-The Python library provides a clean API:
-
-```python
-import snapbase
-
-# Initialize workspace
-workspace = snapbase.Workspace("/path/to/workspace")
-
-# Create snapshots
-snapshot = workspace.create_snapshot("data.csv", name="initial")
-
-# Detect changes
-changes = workspace.status("data.csv", baseline="initial")
-
-# Query historical data
-results = workspace.query("SELECT * FROM snapshot('initial')")
-```
-
-### Command Line Interface
-
 ### Basic Commands
 
 #### Initialize workspace
@@ -155,7 +135,7 @@ snapbase snapshot analytics/user_metrics.sql --name user_analytics
 
 #### Check status
 ```bash
-snapbase status data.csv                           # Compare against latest snapshot
+snapbase status data.csv           # Compare against latest snapshot
 snapbase status data.csv --compare-to snapshot1    # Compare against specific snapshot
 snapbase status data.csv --json                    # JSON output
 ```
@@ -212,6 +192,12 @@ snapbase query data.csv "
   SELECT COUNT(*) as total_records,
          AVG(price) as avg_price
   FROM data WHERE snapshot_name = 'v1_0'
+"
+
+# Query how a product price has changed over time
+snapbase query data.csv "
+  SELECT distinct product, price,
+  FROM data WHERE snapshot_timestamp >= '2024-01-1' and snapshot_timestamp < '2025-01-01'
 "
 ```
 

@@ -318,8 +318,9 @@ impl DataProcessor {
             ))?;
         
         // Get column information by creating a temporary view with LIMIT 0
+        let quoted_table_name = self.quote_identifier("temp_schema_view");
         let temp_view_sql = format!(
-            "CREATE OR REPLACE VIEW temp_schema_view AS SELECT * FROM ({}) AS query_result LIMIT 0",
+            "CREATE OR REPLACE VIEW {quoted_table_name} AS SELECT * FROM ({}) AS query_result LIMIT 0",
             select_query.trim()
         );
         
@@ -329,13 +330,13 @@ impl DataProcessor {
             ))?;
         
         // Get column information from the temporary view and cache it
-        let columns = self.get_column_info_from_view("temp_schema_view")?;
+        let columns = self.get_column_info_from_view(&quoted_table_name)?;
         
         // Cache the columns for streaming queries since we won't have data_view
         self.cached_columns = Some(columns.clone());
         
         // Clean up temporary view
-        self.connection.execute("DROP VIEW IF EXISTS temp_schema_view", [])
+        self.connection.execute(&format!("DROP VIEW IF EXISTS {quoted_table_name}"), [])
             .map_err(|e| crate::error::SnapbaseError::data_processing(
                 format!("Failed to drop temporary view: {e}")
             ))?;
