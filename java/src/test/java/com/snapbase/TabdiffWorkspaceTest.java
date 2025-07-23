@@ -113,12 +113,12 @@ class SnapbaseWorkspaceTest {
         Files.write(testDataFile, updatedCsvContent.getBytes());
         
         // Check status
-        String changes = workspace.status(testDataFile.toString(), "baseline");
+        ChangeDetectionResult changes = workspace.status(testDataFile.toString(), "baseline");
         assertNotNull(changes);
         
-        // Parse JSON to verify structure
-        JsonNode changesJson = workspace.statusAsJson(testDataFile.toString(), "baseline");
-        assertNotNull(changesJson);
+        // Verify the result has expected structure
+        assertNotNull(changes.getSchemaChanges());
+        assertNotNull(changes.getRowChanges());
     }
     
     @Test
@@ -228,12 +228,12 @@ class SnapbaseWorkspaceTest {
         
         // Compare snapshots using filename
         String sourceFile = testDataFile.getFileName().toString();
-        String diff = workspace.diff(sourceFile, "snapshot1", "snapshot2");
+        ChangeDetectionResult diff = workspace.diff(sourceFile, "snapshot1", "snapshot2");
         assertNotNull(diff);
         
-        // Parse JSON diff
-        JsonNode diffJson = workspace.diffAsJson(sourceFile, "snapshot1", "snapshot2");
-        assertNotNull(diffJson);
+        // Verify the result has expected structure
+        assertNotNull(diff.getSchemaChanges());
+        assertNotNull(diff.getRowChanges());
     }
     
     @Test

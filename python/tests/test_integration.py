@@ -28,11 +28,12 @@ class TestIntegration:
         
         # Step 3: Test diff between two snapshots of the same source file
         changes = workspace.diff(sample_csv_file.name, "v1", "v2")
-        assert isinstance(changes, str)
-        # Result should be JSON with change detection data
-        import json
-        changes_data = json.loads(changes)
-        assert isinstance(changes_data, dict)
+        # Import the change detection result type
+        from snapbase._core import ChangeDetectionResult
+        assert isinstance(changes, ChangeDetectionResult)
+        # Verify the result has expected attributes
+        assert hasattr(changes, 'schema_changes')
+        assert hasattr(changes, 'row_changes')
         
         # Step 4: Query data (now returns Polars DataFrame)
         query_result = workspace.query(sample_csv_file.name, "SELECT * FROM data WHERE age > 25")

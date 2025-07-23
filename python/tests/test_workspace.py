@@ -40,11 +40,12 @@ class TestWorkspaceOperations:
         
         # Then check status by comparing current state against the baseline
         result = workspace.status(updated_csv_file.name, "baseline")
-        assert isinstance(result, str)
-        # Result should be JSON with change detection data
-        import json
-        changes = json.loads(result)
-        assert isinstance(changes, dict)
+        # Import the change detection result type
+        from snapbase._core import ChangeDetectionResult
+        assert isinstance(result, ChangeDetectionResult)
+        # Verify the result has expected attributes
+        assert hasattr(result, 'schema_changes')
+        assert hasattr(result, 'row_changes')
     
     def test_query_real(self, temp_workspace, sample_csv_file):
         """Test SQL querying (real functionality)"""
@@ -136,10 +137,12 @@ class TestWorkspaceOperations:
         
         # Compare the two snapshots from the same source
         diff_result = workspace.diff(sample_csv_file.name, "version1", "version2")
-        assert isinstance(diff_result, str)
-        import json
-        diff_data = json.loads(diff_result)
-        assert isinstance(diff_data, dict)
+        # Import the change detection result type
+        from snapbase._core import ChangeDetectionResult
+        assert isinstance(diff_result, ChangeDetectionResult)
+        # Verify the result has expected attributes
+        assert hasattr(diff_result, 'schema_changes')
+        assert hasattr(diff_result, 'row_changes')
 
 
 class TestWorkspaceErrors:

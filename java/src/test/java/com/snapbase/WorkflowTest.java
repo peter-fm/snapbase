@@ -79,13 +79,12 @@ class WorkflowTest {
         
         // Test status check (equivalent to status command)
         try {
-            String changes = workspace.status("employees.csv", "baseline");
+            ChangeDetectionResult changes = workspace.status("employees.csv", "baseline");
             assertNotNull(changes);
-            assertFalse(changes.isEmpty());
             
-            // Parse as JSON to verify structure
-            JsonNode changesJson = workspace.statusAsJson("employees.csv", "baseline");
-            assertNotNull(changesJson);
+            // Verify the result has expected structure
+            assertNotNull(changes.getSchemaChanges());
+            assertNotNull(changes.getRowChanges());
             
         } catch (Exception e) {
             System.out.println("Status check not fully implemented: " + e.getMessage());
@@ -102,9 +101,11 @@ class WorkflowTest {
         
         // Check status again
         try {
-            String changes2 = workspace.status("employees.csv", "snap1");
+            ChangeDetectionResult changes2 = workspace.status("employees.csv", "snap1");
             assertNotNull(changes2);
-            assertFalse(changes2.isEmpty());
+            // Verify the result has expected structure
+            assertNotNull(changes2.getSchemaChanges());
+            assertNotNull(changes2.getRowChanges());
         } catch (Exception e) {
             System.out.println("Second status check not available: " + e.getMessage());
         }
@@ -202,13 +203,12 @@ class WorkflowTest {
     private void testDiffOperations() throws SnapbaseException {
         // Test diff between baseline and snap1 (equivalent to: snapbase diff employees.csv baseline snap1)
         try {
-            String diff1 = workspace.diff("employees.csv", "baseline", "snap1");
+            ChangeDetectionResult diff1 = workspace.diff("employees.csv", "baseline", "snap1");
             assertNotNull(diff1);
-            assertFalse(diff1.isEmpty());
             
-            // Parse as JSON to verify structure
-            JsonNode diff1Json = workspace.diffAsJson("employees.csv", "baseline", "snap1");
-            assertNotNull(diff1Json);
+            // Verify the result has expected structure
+            assertNotNull(diff1.getSchemaChanges());
+            assertNotNull(diff1.getRowChanges());
             
             System.out.println("Diff test 1: baseline -> snap1 completed");
             
@@ -218,12 +218,12 @@ class WorkflowTest {
         
         // Test diff between snap1 and snap2 (equivalent to: snapbase diff employees.csv snap1 snap2)
         try {
-            String diff2 = workspace.diff("employees.csv", "snap1", "snap2");
+            ChangeDetectionResult diff2 = workspace.diff("employees.csv", "snap1", "snap2");
             assertNotNull(diff2);
-            assertFalse(diff2.isEmpty());
             
-            JsonNode diff2Json = workspace.diffAsJson("employees.csv", "snap1", "snap2");
-            assertNotNull(diff2Json);
+            // Verify the result has expected structure
+            assertNotNull(diff2.getSchemaChanges());
+            assertNotNull(diff2.getRowChanges());
             
             System.out.println("Diff test 2: snap1 -> snap2 completed");
             
@@ -233,12 +233,12 @@ class WorkflowTest {
         
         // Test diff between baseline and snap2 (equivalent to: snapbase diff employees.csv baseline snap2)
         try {
-            String diff3 = workspace.diff("employees.csv", "baseline", "snap2");
+            ChangeDetectionResult diff3 = workspace.diff("employees.csv", "baseline", "snap2");
             assertNotNull(diff3);
-            assertFalse(diff3.isEmpty());
             
-            JsonNode diff3Json = workspace.diffAsJson("employees.csv", "baseline", "snap2");
-            assertNotNull(diff3Json);
+            // Verify the result has expected structure
+            assertNotNull(diff3.getSchemaChanges());
+            assertNotNull(diff3.getRowChanges());
             
             System.out.println("Diff test 3: baseline -> snap2 completed");
             
