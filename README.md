@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A queryable time machine for your structured data from entire databases and SQL queries to Excel, CSV, parquet and JSON files. Snapbase is data version control augmented by SQL. Supports both local and cloud snapshot storage.
+A queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
 
 ## Features
 
@@ -25,7 +25,7 @@ Full-featured command-line interface for snapshot management and change detectio
 ### 🐍 Python Library
 Python bindings for programmatic access to snapbase functionality.
 
-**[📖 Python Documentation](python/snapbase/README.md)**
+**[📖 Python Documentation](python/README.md)**
 
 ### ☕ Java Library
 Java API with native performance through JNI bindings.
@@ -46,9 +46,7 @@ cargo install --git https://github.com/peter-fm/snapbase
 
 ### Python Installation
 ```bash
-pip install snapbase
-# or
-uv add snapbase
+uv add git+shttps://github.com/peter-fm/snapbase.git
 ```
 
 ### Java Installation

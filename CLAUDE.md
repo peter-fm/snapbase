@@ -82,6 +82,17 @@ cd ../java && mvn clean package
 cd java && mvn test
 ```
 
+### Python Development
+```bash
+cd python
+# Build python API with native bindings
+uv run --with maturin maturin develop
+# To run tests
+uv run test
+# To run python commands
+uv run python <args>
+```
+
 ## Architecture
 
 ### Core Components

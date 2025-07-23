@@ -17,9 +17,9 @@ Python bindings for Snapbase - a queryable time machine for your structured data
 
 ## 📦 Installation
 
-### From PyPI
+### From PyPI using uv
 ```bash
-pip install snapbase
+uv add git+shttps://github.com/peter-fm/snapbase.git
 ```
 
 ### From Source

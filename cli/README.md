@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A queryable time machine for your structured data from entire databases and SQL queries to Excel, CSV, parquet and JSON files. Snapbase is data version control augmented by SQL. Supports both local and cloud snapshot storage.
+A queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
 
 ## Features
 
