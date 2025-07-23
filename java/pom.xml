@@ -237,7 +237,8 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <classifier>fat</classifier>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>fat</shadedClassifierName>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <manifestEntries>
@@ -266,9 +267,23 @@
                         </goals>
                         <configuration>
                             <target>
-                                <copy file="${project.basedir}/../target/release/libsnapbase_java${native.lib.extension}" 
-                                      todir="${project.build.outputDirectory}" 
-                                      failonerror="false"/>
+                                <!-- Try multiple possible locations for the native library -->
+                                <copy todir="${project.build.outputDirectory}" failonerror="false">
+                                    <fileset dir="${project.basedir}/../target/release" includes="libsnapbase_java${native.lib.extension}" erroronmissingdir="false"/>
+                                </copy>
+                                <copy todir="${project.build.outputDirectory}" failonerror="false">
+                                    <fileset dir="${project.basedir}/../target/aarch64-apple-darwin/release" includes="libsnapbase_java${native.lib.extension}" erroronmissingdir="false"/>
+                                </copy>
+                                <copy todir="${project.build.outputDirectory}" failonerror="false">
+                                    <fileset dir="${project.basedir}/../target/x86_64-unknown-linux-gnu/release" includes="libsnapbase_java${native.lib.extension}" erroronmissingdir="false"/>
+                                </copy>
+                                <copy todir="${project.build.outputDirectory}" failonerror="false">
+                                    <fileset dir="${project.basedir}/../target/x86_64-pc-windows-msvc/release" includes="snapbase_java.dll" erroronmissingdir="false"/>
+                                </copy>
+                                <!-- Also try the src/main/resources directory in case it was copied there by CI -->
+                                <copy todir="${project.build.outputDirectory}" failonerror="false">
+                                    <fileset dir="${project.basedir}/src/main/resources" includes="libsnapbase_java${native.lib.extension}" erroronmissingdir="false"/>
+                                </copy>
                             </target>
                         </configuration>
                     </execution>

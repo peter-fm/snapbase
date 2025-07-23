@@ -171,6 +171,14 @@ jobs:
         run: |
           mvn clean compile package -DskipTests
 
+      - name: Debug - List target directory contents
+        working-directory: java/target
+        run: |
+          echo "Contents of java/target directory:"
+          ls -la
+          echo "Looking for JAR files:"
+          find . -name "*.jar" -type f
+
       - name: Rename JAR with platform suffix
         working-directory: java/target
         run: |

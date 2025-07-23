@@ -112,7 +112,8 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <classifier>fat</classifier>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>fat</shadedClassifierName>
               <transformers>
                 <transformer>
                   <manifestEntries>
@@ -138,7 +139,21 @@
             </goals>
             <configuration>
               <target>
-                <copy />
+                <copy>
+                  <fileset />
+                </copy>
+                <copy>
+                  <fileset />
+                </copy>
+                <copy>
+                  <fileset />
+                </copy>
+                <copy>
+                  <fileset />
+                </copy>
+                <copy>
+                  <fileset />
+                </copy>
               </target>
             </configuration>
           </execution>
