@@ -50,7 +50,7 @@ cargo install --path .
 
 ### Python Installation (uv)
 ```bash
-uv add install "git+https://github.com/peter-fm/snapbase.git@main#subdirectory=python"
+uv add "git+https://github.com/peter-fm/snapbase.git@main#subdirectory=python"
 ```
 
 ### Java Installation

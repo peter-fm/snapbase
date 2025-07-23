@@ -3,16 +3,17 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'           # Matches v1.0.0, v1.0.0-cli, v1.0.0-python, v1.0.0-java, etc.
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  build-cli-binaries:
+    name: Build CLI Binary - ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    if: contains(github.ref, '-cli') || !contains(github.ref, '-')
     strategy:
       matrix:
         include:
@@ -40,8 +41,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build (bundled)
-        run: cargo build --release --target ${{ matrix.target }} --features bundled
+      - name: Build CLI binary (bundled)
+        run: cargo build --release --target ${{ matrix.target }} --features bundled --bin snapbase
 
       - name: Rename binary (Windows)
         if: matrix.os == 'windows-latest'
@@ -53,17 +54,144 @@ jobs:
         run: |
           cp target/${{ matrix.target }}/release/snapbase ${{ matrix.name }}
 
-      - name: Upload artifact
+      - name: Upload CLI binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}
 
-  release:
+  build-python-wheels:
+    name: Build Python Wheels - ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.os }}
+    if: contains(github.ref, '-python') || !contains(github.ref, '-')
+    strategy:
+      matrix:
+        platform:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install maturin
+        run: uv tool install maturin
+
+      - name: Build Python wheel
+        working-directory: python
+        run: |
+          uv run --with maturin maturin build --release --target ${{ matrix.platform.target }} --strip
+
+      - name: Upload Python wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.platform.name }}
+          path: python/target/wheels/*.whl
+
+  build-java-jars:
+    name: Build Java Fat JAR - ${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.os }}
+    if: contains(github.ref, '-java') || !contains(github.ref, '-')
+    strategy:
+      matrix:
+        platform:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows
+            lib-extension: .dll
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos
+            lib-extension: .dylib
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux
+            lib-extension: .so
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('java/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: Build Rust JNI bindings
+        working-directory: java-bindings
+        run: cargo build --release --target ${{ matrix.platform.target }} --features jni
+
+      - name: Copy native library (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        run: |
+          mkdir -p java/src/main/resources/
+          copy target\${{ matrix.platform.target }}\release\snapbase_java.dll java\src\main\resources\libsnapbase_java${{ matrix.platform.lib-extension }}
+
+      - name: Copy native library (Unix)
+        if: matrix.platform.os != 'windows-latest'
+        run: |
+          mkdir -p java/src/main/resources/
+          cp target/${{ matrix.platform.target }}/release/libsnapbase_java${{ matrix.platform.lib-extension }} java/src/main/resources/
+
+      - name: Build Java fat JAR
+        working-directory: java
+        run: |
+          mvn clean compile package -DskipTests
+
+      - name: Rename JAR with platform suffix
+        working-directory: java/target
+        run: |
+          if [ "${{ matrix.platform.os }}" = "windows-latest" ]; then
+            mv snapbase-java-0.1.0-fat.jar snapbase-java-0.1.0-${{ matrix.platform.name }}-fat.jar
+          else
+            mv snapbase-java-0.1.0-fat.jar snapbase-java-0.1.0-${{ matrix.platform.name }}-fat.jar
+          fi
+        shell: bash
+
+      - name: Upload Java JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-jar-${{ matrix.platform.name }}
+          path: java/target/snapbase-java-0.1.0-${{ matrix.platform.name }}-fat.jar
+
+  create-release:
     name: Create Release
-    needs: build
+    needs: [build-cli-binaries, build-python-wheels, build-java-jars]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && always()
     
     steps:
       - name: Checkout code
@@ -75,14 +203,63 @@ jobs:
           path: artifacts
 
       - name: Display structure of downloaded files
-        run: ls -la artifacts/
+        run: find artifacts -type f -name "*" | sort
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          # Copy CLI binaries
+          find artifacts -name "snapbase-*" -type f -exec cp {} release/ \;
+          # Copy Python wheels
+          find artifacts -name "*.whl" -exec cp {} release/ \;
+          # Copy Java JARs
+          find artifacts -name "*.jar" -exec cp {} release/ \;
+          ls -la release/
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/snapbase-*
+          files: release/*
           draft: false
           prerelease: false
           generate_release_notes: true
+          body: |
+            ## 🚀 Snapbase Release
+
+            This release includes pre-built binaries for multiple platforms and languages:
+
+            ### 🛠️ CLI Binaries
+            - `snapbase-windows-x64.exe` - Windows x64 executable
+            - `snapbase-macos-arm64` - macOS Apple Silicon binary
+            - `snapbase-linux-x64` - Linux x64 binary
+
+            **Usage:**
+            ```bash
+            # Download and run directly
+            ./snapbase-linux-x64 --help
+            ```
+
+            ### 🐍 Python Wheels
+            - `snapbase-*-win_amd64.whl` - Windows x64
+            - `snapbase-*-macosx_*_arm64.whl` - macOS Apple Silicon
+            - `snapbase-*-linux_x86_64.whl` - Linux x64
+
+            **Installation:**
+            ```bash
+            pip install <wheel-file-url>
+            ```
+
+            ### ☕ Java Fat JARs
+            - `snapbase-java-*-windows-fat.jar` - Windows with native libraries
+            - `snapbase-java-*-macos-fat.jar` - macOS with native libraries  
+            - `snapbase-java-*-linux-fat.jar` - Linux with native libraries
+
+            **Usage:**
+            ```bash
+            java -cp snapbase-java-*-fat.jar your.main.Class
+            ```
+
+            Each JAR is self-contained with all dependencies and native libraries included.
+
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}

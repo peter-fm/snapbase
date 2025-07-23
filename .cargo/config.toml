@@ -1,0 +1,3 @@
+[build]
+# Use shorter paths to avoid Windows path length issues
+target-dir = "target"
