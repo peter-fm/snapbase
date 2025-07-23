@@ -2,16 +2,16 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A queryable timemachine of your structured data from entire databases and SQL queries to CSV, parquet and JSON files.
+A queryable time machine for your structured data from entire databases and SQL queries to Excel, CSV, parquet and JSON files. Snapbase is data version control augmented by SQL. Supports both local and cloud snapshot storage.
 
 ## Features
 
 ✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
-📊 **Multiple format support** - Databases, CSV, JSON, Parquet, and SQL files  
+📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
 ☁️ **Cloud storage support** - Store snapshots locally or in S3  
-📈 **SQL querying** - Query across snapshots using SQL to monitor changes over time.  
-⚡ **Performance optimized** - Streaming processing for large datasets  
+📈 **SQL querying** - Query across snapshots using SQL to monitor changes at the cell level over time.  
+⚡ **Performance optimized** - Powered by Rust and DuckDB.
 
 ## Components
 
@@ -72,7 +72,7 @@ snapbase snapshot data.csv --name initial
 snapbase status data.csv
 # Snapshot the new state
 snapbase snapshot data.csv --name updated
-# Go back in time!
+# Explore back in time!
 snapbase query data.csv "select * from data where snapshot_name = 'initial'" 
 # Revert csv back
 snapbase export data.csv --to initial --file data.csv --force
@@ -81,17 +81,18 @@ snapbase export data.csv --to initial --file data.csv --force
 **Python:**
 ```python
 import snapbase
-
 # Initialize workspace
 workspace = snapbase.Workspace("/path/to/workspace")
-
 # Create snapshots
 workspace.create_snapshot("data.csv", name="initial")
-# Later after changes ...
+# Later see if the file has changed
+changes = workspace.status("data.csv", baseline="initial")
+# Snapshot the new state
 workspace.create_snapshot("data.csv", name="updated")
-
-# Detect changes
-changes = workspace.detect_changes("data.csv", baseline="initial")
+# Explore back in time!
+df = workspace.query("data.csv", "select * from data where snapshot_name = 'initial'")
+print(df)
+workspace.export("data.csv", output_file="data.csv", to_snapshot="initial", force=True)
 ```
 
 **Java:**
@@ -104,11 +105,20 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/path/to/workspace")) 
     
     // Create snapshots
     workspace.createSnapshot("data.csv", "initial");
-    // Later after changes ...
+    
+    // Later see if the file has changed
+    String status = workspace.status("data.csv", "initial");
+    System.out.println(status);
+    
+    // Snapshot the new state
     workspace.createSnapshot("data.csv", "updated");
     
-    // Detect changes
-    String changes = workspace.detectChanges("data.csv", "initial");
+    // Explore back in time!
+    String results = workspace.query("data.csv", "select * from data where snapshot_name = 'initial'");
+    System.out.println(results);
+    
+    // Revert csv back
+    workspace.export("data.csv", "data.csv", "initial", true);
 }
 ```
 
@@ -116,6 +126,7 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/path/to/workspace")) 
 
 | Format | Read | Export | Notes |
 |--------|------|--------|-------|
+| Excel | ✅ | ✅ | Backup versions of excel data |
 | CSV | ✅ | ✅ | Auto-detects delimiters and encoding |
 | JSON | ✅ | ✅ | Flattens nested structures on export |
 | Parquet | ✅ | ✅ | Native format for storage |

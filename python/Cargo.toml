@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Core snapbase functionality
-snapbase-core = { path = "../core" }
+snapbase-core = { path = "../core", features = ["python"] }
 
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 # No abi3 restriction since we require Python 3.12+

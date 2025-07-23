@@ -17,7 +17,6 @@ use snapbase_core::{
     query::SnapshotQueryEngine,
     naming::SnapshotNamer,
     config::get_snapshot_config,
-    hash,
     UnifiedExporter, ExportOptions, ExportFormat,
 };
 
@@ -100,7 +99,7 @@ impl Workspace {
     }
 
     /// Check status of current file against a baseline snapshot
-    fn status(&self, file_path: &str, baseline: &str) -> PyResult<String> {
+    fn status(&self, file_path: &str, baseline: &str) -> PyResult<snapbase_core::change_detection::ChangeDetectionResult> {
         let resolver = SnapshotResolver::new(self.workspace.clone());
         
         // Convert file path to absolute path
@@ -162,12 +161,7 @@ impl Workspace {
             &current_row_data,
         ).map_err(|e| PyRuntimeError::new_err(format!("Failed to check status: {}", e)))?;
         
-        // Convert to JSON string
-        let changes_json = serde_json::to_value(&changes)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to serialize changes: {}", e)))?;
-        
-        Ok(serde_json::to_string_pretty(&changes_json)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to format changes: {}", e)))?)
+        Ok(changes)
     }
 
     /// Query historical snapshots using SQL, returning Polars DataFrame for zero-copy performance
@@ -251,7 +245,7 @@ impl Workspace {
     }
 
     /// Compare two snapshots
-    fn diff(&self, source: &str, from_snapshot: &str, to_snapshot: &str) -> PyResult<String> {
+    fn diff(&self, source: &str, from_snapshot: &str, to_snapshot: &str) -> PyResult<snapbase_core::change_detection::ChangeDetectionResult> {
         let resolver = SnapshotResolver::new(self.workspace.clone());
         
         // Resolve both snapshots
@@ -313,12 +307,7 @@ impl Workspace {
             &to_row_data,
         ).map_err(|e| PyRuntimeError::new_err(format!("Failed to detect changes: {}", e)))?;
         
-        // Convert to JSON
-        let diff_json = serde_json::to_value(&changes)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to serialize diff: {}", e)))?;
-        
-        Ok(serde_json::to_string_pretty(&diff_json)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to format diff: {}", e)))?)
+        Ok(changes)
     }
 
     /// Export snapshot data to a file using unified export functionality
@@ -449,5 +438,20 @@ fn create_hive_snapshot(
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Workspace>()?;
+    
+    // Add change detection result types
+    m.add_class::<snapbase_core::change_detection::ChangeDetectionResult>()?;
+    m.add_class::<snapbase_core::change_detection::SchemaChanges>()?;
+    m.add_class::<snapbase_core::change_detection::RowChanges>()?;
+    m.add_class::<snapbase_core::change_detection::ColumnOrderChange>()?;
+    m.add_class::<snapbase_core::change_detection::ColumnAddition>()?;
+    m.add_class::<snapbase_core::change_detection::ColumnRemoval>()?;
+    m.add_class::<snapbase_core::change_detection::ColumnRename>()?;
+    m.add_class::<snapbase_core::change_detection::TypeChange>()?;
+    m.add_class::<snapbase_core::change_detection::RowModification>()?;
+    m.add_class::<snapbase_core::change_detection::CellChange>()?;
+    m.add_class::<snapbase_core::change_detection::RowAddition>()?;
+    m.add_class::<snapbase_core::change_detection::RowRemoval>()?;
+    
     Ok(())
 }

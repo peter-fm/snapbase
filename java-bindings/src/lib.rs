@@ -55,6 +55,368 @@ fn handle_result<T>(env: &mut JNIEnv, result: SnapbaseResult<T>) -> Result<T, jn
     })
 }
 
+/// Convert ChangeDetectionResult to Java object
+fn change_detection_result_to_jobject<'local>(
+    env: &mut JNIEnv<'local>,
+    result: &snapbase_core::change_detection::ChangeDetectionResult,
+) -> Result<JObject<'local>, jni::errors::Error> {
+    // Create SchemaChanges object
+    let schema_changes = schema_changes_to_jobject(env, &result.schema_changes)?;
+    
+    // Create RowChanges object
+    let row_changes = row_changes_to_jobject(env, &result.row_changes)?;
+    
+    // Create ChangeDetectionResult object
+    let class = env.find_class("com/snapbase/ChangeDetectionResult")?;
+    let constructor_sig = "(Lcom/snapbase/SchemaChanges;Lcom/snapbase/RowChanges;)V";
+    let obj = env.new_object(&class, constructor_sig, &[(&schema_changes).into(), (&row_changes).into()])?;
+    
+    Ok(obj)
+}
+
+/// Convert SchemaChanges to Java object
+fn schema_changes_to_jobject<'local>(
+    env: &mut JNIEnv<'local>,
+    schema_changes: &snapbase_core::change_detection::SchemaChanges,
+) -> Result<JObject<'local>, jni::errors::Error> {
+    // Create ColumnOrderChange object (nullable)
+    let column_order = match &schema_changes.column_order {
+        Some(change) => {
+            let class = env.find_class("com/snapbase/ColumnOrderChange")?;
+            let before_list = string_vec_to_arraylist(env, &change.before)?;
+            let after_list = string_vec_to_arraylist(env, &change.after)?;
+            let obj = env.new_object(
+                &class,
+                "(Ljava/util/List;Ljava/util/List;)V",
+                &[(&before_list).into(), (&after_list).into()],
+            )?;
+            Some(obj)
+        }
+        None => None,
+    };
+    
+    // Create lists for additions, removals, renames, and type changes
+    let columns_added = column_additions_to_arraylist(env, &schema_changes.columns_added)?;
+    let columns_removed = column_removals_to_arraylist(env, &schema_changes.columns_removed)?;
+    let columns_renamed = column_renames_to_arraylist(env, &schema_changes.columns_renamed)?;
+    let type_changes = type_changes_to_arraylist(env, &schema_changes.type_changes)?;
+    
+    // Create SchemaChanges object
+    let class = env.find_class("com/snapbase/SchemaChanges")?;
+    let constructor_sig = "(Lcom/snapbase/ColumnOrderChange;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;)V";
+    
+    let null_obj = JObject::null();
+    let column_order_arg = match column_order {
+        Some(ref obj) => obj.into(),
+        None => (&null_obj).into(),
+    };
+    
+    let obj = env.new_object(
+        &class,
+        constructor_sig,
+        &[
+            column_order_arg,
+            (&columns_added).into(),
+            (&columns_removed).into(),
+            (&columns_renamed).into(),
+            (&type_changes).into(),
+        ],
+    )?;
+    
+    Ok(obj)
+}
+
+/// Convert RowChanges to Java object
+fn row_changes_to_jobject<'local>(
+    env: &mut JNIEnv<'local>,
+    row_changes: &snapbase_core::change_detection::RowChanges,
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let modified = row_modifications_to_arraylist(env, &row_changes.modified)?;
+    let added = row_additions_to_arraylist(env, &row_changes.added)?;
+    let removed = row_removals_to_arraylist(env, &row_changes.removed)?;
+    
+    let class = env.find_class("com/snapbase/RowChanges")?;
+    let constructor_sig = "(Ljava/util/List;Ljava/util/List;Ljava/util/List;)V";
+    let obj = env.new_object(
+        &class,
+        constructor_sig,
+        &[(&modified).into(), (&added).into(), (&removed).into()],
+    )?;
+    
+    Ok(obj)
+}
+
+/// Helper function to create ArrayList from Vec<String>
+fn string_vec_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    vec: &[String],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for item in vec {
+        let jstr = string_to_jstring(env, item)?;
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&jstr).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create ArrayList of ColumnAddition objects
+fn column_additions_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    additions: &[snapbase_core::change_detection::ColumnAddition],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for addition in additions {
+        let class = env.find_class("com/snapbase/ColumnAddition")?;
+        let name = string_to_jstring(env, &addition.name)?;
+        let data_type = string_to_jstring(env, &addition.data_type)?;
+        let position = addition.position as i32;
+        let nullable = addition.nullable;
+        let default_jstring = match &addition.default_value {
+            Some(val) => Some(string_to_jstring(env, val)?),
+            None => None,
+        };
+        let null_obj = JObject::null();
+        let default_value = match default_jstring {
+            Some(ref jstr) => jstr.into(),
+            None => (&null_obj).into(),
+        };
+        
+        let obj = env.new_object(
+            &class,
+            "(Ljava/lang/String;Ljava/lang/String;IZLjava/lang/String;)V",
+            &[
+                (&name).into(),
+                (&data_type).into(),
+                position.into(),
+                nullable.into(),
+                default_value,
+            ],
+        )?;
+        
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create ArrayList of ColumnRemoval objects
+fn column_removals_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    removals: &[snapbase_core::change_detection::ColumnRemoval],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for removal in removals {
+        let class = env.find_class("com/snapbase/ColumnRemoval")?;
+        let name = string_to_jstring(env, &removal.name)?;
+        let data_type = string_to_jstring(env, &removal.data_type)?;
+        let position = removal.position as i32;
+        let nullable = removal.nullable;
+        
+        let obj = env.new_object(
+            &class,
+            "(Ljava/lang/String;Ljava/lang/String;IZ)V",
+            &[
+                (&name).into(),
+                (&data_type).into(),
+                position.into(),
+                nullable.into(),
+            ],
+        )?;
+        
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create ArrayList of ColumnRename objects
+fn column_renames_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    renames: &[snapbase_core::change_detection::ColumnRename],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for rename in renames {
+        let class = env.find_class("com/snapbase/ColumnRename")?;
+        let from = string_to_jstring(env, &rename.from)?;
+        let to = string_to_jstring(env, &rename.to)?;
+        
+        let obj = env.new_object(
+            &class,
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            &[(&from).into(), (&to).into()],
+        )?;
+        
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create ArrayList of TypeChange objects
+fn type_changes_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    type_changes: &[snapbase_core::change_detection::TypeChange],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for type_change in type_changes {
+        let class = env.find_class("com/snapbase/TypeChange")?;
+        let column = string_to_jstring(env, &type_change.column)?;
+        let from = string_to_jstring(env, &type_change.from)?;
+        let to = string_to_jstring(env, &type_change.to)?;
+        
+        let obj = env.new_object(
+            &class,
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            &[(&column).into(), (&from).into(), (&to).into()],
+        )?;
+        
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create ArrayList of RowModification objects
+fn row_modifications_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    modifications: &[snapbase_core::change_detection::RowModification],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for modification in modifications {
+        let class = env.find_class("com/snapbase/RowModification")?;
+        let row_index = modification.row_index as i64;
+        let changes_map = cell_changes_to_hashmap(env, &modification.changes)?;
+        
+        let obj = env.new_object(
+            &class,
+            "(JLjava/util/Map;)V",
+            &[row_index.into(), (&changes_map).into()],
+        )?;
+        
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create ArrayList of RowAddition objects
+fn row_additions_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    additions: &[snapbase_core::change_detection::RowAddition],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for addition in additions {
+        let class = env.find_class("com/snapbase/RowAddition")?;
+        let row_index = addition.row_index as i64;
+        let data_map = string_map_to_hashmap(env, &addition.data)?;
+        
+        let obj = env.new_object(
+            &class,
+            "(JLjava/util/Map;)V",
+            &[row_index.into(), (&data_map).into()],
+        )?;
+        
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create ArrayList of RowRemoval objects
+fn row_removals_to_arraylist<'local>(
+    env: &mut JNIEnv<'local>,
+    removals: &[snapbase_core::change_detection::RowRemoval],
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let array_list_class = env.find_class("java/util/ArrayList")?;
+    let array_list = env.new_object(&array_list_class, "()V", &[])?;
+    
+    for removal in removals {
+        let class = env.find_class("com/snapbase/RowRemoval")?;
+        let row_index = removal.row_index as i64;
+        let data_map = string_map_to_hashmap(env, &removal.data)?;
+        
+        let obj = env.new_object(
+            &class,
+            "(JLjava/util/Map;)V",
+            &[row_index.into(), (&data_map).into()],
+        )?;
+        
+        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+    }
+    
+    Ok(array_list)
+}
+
+/// Helper function to create HashMap from HashMap<String, CellChange>
+fn cell_changes_to_hashmap<'local>(
+    env: &mut JNIEnv<'local>,
+    changes: &std::collections::HashMap<String, snapbase_core::change_detection::CellChange>,
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let hashmap_class = env.find_class("java/util/HashMap")?;
+    let hashmap = env.new_object(&hashmap_class, "()V", &[])?;
+    
+    for (key, value) in changes {
+        let key_str = string_to_jstring(env, key)?;
+        
+        // Create CellChange object
+        let cell_change_class = env.find_class("com/snapbase/CellChange")?;
+        let before = string_to_jstring(env, &value.before)?;
+        let after = string_to_jstring(env, &value.after)?;
+        let cell_change = env.new_object(
+            &cell_change_class,
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            &[(&before).into(), (&after).into()],
+        )?;
+        
+        env.call_method(
+            &hashmap,
+            "put",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+            &[(&key_str).into(), (&cell_change).into()],
+        )?;
+    }
+    
+    Ok(hashmap)
+}
+
+/// Helper function to create HashMap from HashMap<String, String>
+fn string_map_to_hashmap<'local>(
+    env: &mut JNIEnv<'local>,
+    map: &std::collections::HashMap<String, String>,
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let hashmap_class = env.find_class("java/util/HashMap")?;
+    let hashmap = env.new_object(&hashmap_class, "()V", &[])?;
+    
+    for (key, value) in map {
+        let key_str = string_to_jstring(env, key)?;
+        let value_str = string_to_jstring(env, value)?;
+        
+        env.call_method(
+            &hashmap,
+            "put",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+            &[(&key_str).into(), (&value_str).into()],
+        )?;
+    }
+    
+    Ok(hashmap)
+}
+
 /// Create a new workspace
 #[no_mangle]
 pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateWorkspace<'local>(
@@ -220,7 +582,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
     handle: jlong,
     file_path: JString<'local>,
     baseline: JString<'local>,
-) -> jstring {
+) -> jobject {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
     
     let file_path_str = match jstring_to_string(&mut env, &file_path) {
@@ -352,27 +714,11 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
         }
     };
     
-    // Convert to JSON string
-    let changes_json = match serde_json::to_value(&changes) {
-        Ok(json) => json,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to serialize changes: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let result_str = match serde_json::to_string_pretty(&changes_json) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to format changes: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    match string_to_jstring(&mut env, &result_str) {
-        Ok(jstr) => jstr.into_raw(),
+    // Convert to Java object
+    match change_detection_result_to_jobject(&mut env, &changes) {
+        Ok(obj) => obj.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result string");
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result object");
             std::ptr::null_mut()
         }
     }
@@ -670,7 +1016,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
     source: JString<'local>,
     from_snapshot: JString<'local>,
     to_snapshot: JString<'local>,
-) -> jstring {
+) -> jobject {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
     
     let source_str = match jstring_to_string(&mut env, &source) {
@@ -833,27 +1179,11 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
         }
     };
     
-    // Convert to JSON
-    let diff_json = match serde_json::to_value(&changes) {
-        Ok(json) => json,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to serialize diff: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let result_str = match serde_json::to_string_pretty(&diff_json) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to format diff: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    match string_to_jstring(&mut env, &result_str) {
-        Ok(jstr) => jstr.into_raw(),
+    // Convert to Java object
+    match change_detection_result_to_jobject(&mut env, &changes) {
+        Ok(obj) => obj.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result string");
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result object");
             std::ptr::null_mut()
         }
     }

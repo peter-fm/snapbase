@@ -68,6 +68,9 @@ aws-config = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 
+# Python bindings (optional)
+pyo3 = { version = "0.25", features = ["extension-module"], optional = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 
@@ -75,3 +78,4 @@ criterion = { workspace = true }
 default = ["bundled"]
 bundled = ["duckdb/bundled"]
 test-fixtures = []
+python = ["pyo3"]

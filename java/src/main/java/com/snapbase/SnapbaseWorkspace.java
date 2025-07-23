@@ -142,30 +142,14 @@ public class SnapbaseWorkspace implements Closeable {
      * 
      * @param filePath Path to the current file
      * @param baseline Name of the baseline snapshot
-     * @return JSON string containing status information
+     * @return ChangeDetectionResult containing structured status information
      * @throws SnapbaseException if status check fails
      */
-    public String status(String filePath, String baseline) throws SnapbaseException {
+    public ChangeDetectionResult status(String filePath, String baseline) throws SnapbaseException {
         checkHandle();
         return nativeStatus(nativeHandle, filePath, baseline);
     }
     
-    /**
-     * Check status of current file against a baseline snapshot.
-     * 
-     * @param filePath Path to the current file
-     * @param baseline Name of the baseline snapshot
-     * @return Parsed status as a JsonNode
-     * @throws SnapbaseException if status check fails
-     */
-    public JsonNode statusAsJson(String filePath, String baseline) throws SnapbaseException {
-        String statusJson = status(filePath, baseline);
-        try {
-            return objectMapper.readTree(statusJson);
-        } catch (IOException e) {
-            throw new SnapbaseException("Failed to parse status JSON: " + e.getMessage(), e);
-        }
-    }
     
     /**
      * Query historical snapshots using SQL with zero-copy Arrow return.
@@ -319,31 +303,14 @@ public class SnapbaseWorkspace implements Closeable {
      * @param source Source file or pattern
      * @param fromSnapshot Name of the from snapshot
      * @param toSnapshot Name of the to snapshot
-     * @return JSON string containing diff information
+     * @return ChangeDetectionResult containing structured diff information
      * @throws SnapbaseException if diff operation fails
      */
-    public String diff(String source, String fromSnapshot, String toSnapshot) throws SnapbaseException {
+    public ChangeDetectionResult diff(String source, String fromSnapshot, String toSnapshot) throws SnapbaseException {
         checkHandle();
         return nativeDiff(nativeHandle, source, fromSnapshot, toSnapshot);
     }
     
-    /**
-     * Compare two snapshots and return results as JsonNode.
-     * 
-     * @param source Source file or pattern
-     * @param fromSnapshot Name of the from snapshot
-     * @param toSnapshot Name of the to snapshot
-     * @return Parsed diff results as a JsonNode
-     * @throws SnapbaseException if diff operation fails
-     */
-    public JsonNode diffAsJson(String source, String fromSnapshot, String toSnapshot) throws SnapbaseException {
-        String diffJson = diff(source, fromSnapshot, toSnapshot);
-        try {
-            return objectMapper.readTree(diffJson);
-        } catch (IOException e) {
-            throw new SnapbaseException("Failed to parse diff JSON: " + e.getMessage(), e);
-        }
-    }
     
     /**
      * Export snapshot data to a file.
@@ -486,14 +453,14 @@ public class SnapbaseWorkspace implements Closeable {
     private static native long nativeCreateWorkspace(String workspacePath) throws SnapbaseException;
     private static native void nativeInit(long handle) throws SnapbaseException;
     private static native String nativeCreateSnapshot(long handle, String filePath, String name) throws SnapbaseException;
-    private static native String nativeStatus(long handle, String filePath, String baseline) throws SnapbaseException;
+    private static native ChangeDetectionResult nativeStatus(long handle, String filePath, String baseline) throws SnapbaseException;
     private static native void nativeQueryArrow(long handle, String source, String sql, long arrayPtr, long schemaPtr) throws SnapbaseException;
     private static native String nativeGetPath(long handle) throws SnapbaseException;
     private static native List<String> nativeListSnapshots(long handle) throws SnapbaseException;
     private static native List<String> nativeListSnapshotsForSource(long handle, String sourcePath) throws SnapbaseException;
     private static native boolean nativeSnapshotExists(long handle, String name) throws SnapbaseException;
     private static native String nativeStats(long handle) throws SnapbaseException;
-    private static native String nativeDiff(long handle, String source, String fromSnapshot, String toSnapshot) throws SnapbaseException;
+    private static native ChangeDetectionResult nativeDiff(long handle, String source, String fromSnapshot, String toSnapshot) throws SnapbaseException;
     private static native String nativeExport(long handle, String source, String outputFile, String toSnapshot, boolean force) throws SnapbaseException;
     private static native void nativeClose(long handle);
 }

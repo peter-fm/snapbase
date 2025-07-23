@@ -2,19 +2,17 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A snapshot-based structured data diff tool that detects schema, column-level, and cell-level changes between versions of structured datasets.
+A queryable time machine for your structured data from entire databases and SQL queries to Excel, CSV, parquet and JSON files. Snapbase is data version control augmented by SQL. Supports both local and cloud snapshot storage.
 
 ## Features
 
 ✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
-📊 **Multiple format support** - CSV, JSON, Parquet, and SQL files  
+📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
 ☁️ **Cloud storage support** - Store snapshots locally or in S3  
-📤 **Export capability** - Export snapshots to CSV or Parquet files  
-📈 **SQL querying** - Query historical snapshots using SQL  
-🏷️ **Automatic naming** - Configurable patterns for automatic snapshot naming  
-⚡ **Performance optimized** - Streaming processing for large datasets  
-🧹 **Storage management** - Archive cleanup and compression
+📈 **SQL querying** - Query across snapshots using SQL to monitor changes at the cell level over time.  
+⚡ **Performance optimized** - Powered by Rust and DuckDB.
+
 
 ## 📦 Installation
 
@@ -111,7 +109,7 @@ workspace = snapbase.Workspace("/path/to/workspace")
 snapshot = workspace.create_snapshot("data.csv", name="initial")
 
 # Detect changes
-changes = workspace.detect_changes("data.csv", baseline="initial")
+changes = workspace.status("data.csv", baseline="initial")
 
 # Query historical data
 results = workspace.query("SELECT * FROM snapshot('initial')")
@@ -281,7 +279,7 @@ snapbase config show
   - **File snapshots**: filename without extension (e.g., "sales" from "sales.csv")
   - **Database snapshots**: `{database_name}_{table_name}` (e.g., "ecommerce_users" from database "ecommerce" and table "users")
 - `{source_ext}` - file extension (e.g., "csv" from "sales.csv")
-- `{format}` - file format (csv, json, parquet, sql, etc.)
+- `{format}` - file format (csv, json, parquet, sql, xlsx, xls, etc.)
 - `{seq}` - auto-incrementing sequence number (1, 2, 3, ...)
 - `{timestamp}` - current timestamp (YYYYMMDD_HHMMSS format)
 - `{date}` - current date (YYYYMMDD format)

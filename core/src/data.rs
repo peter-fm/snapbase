@@ -2044,7 +2044,7 @@ impl DataProcessor {
     pub fn is_supported_format(file_path: &Path) -> bool {
         if let Some(extension) = file_path.extension().and_then(|s| s.to_str()) {
             matches!(extension.to_lowercase().as_str(), 
-                     "csv" | "parquet" | "json" | "jsonl" | "tsv" | "sql")
+                     "csv" | "parquet" | "json" | "jsonl" | "tsv" | "sql" | "xlsx" | "xls")
         } else {
             false
         }
@@ -2095,6 +2095,8 @@ mod tests {
         assert!(DataProcessor::is_supported_format(Path::new("test.parquet")));
         assert!(DataProcessor::is_supported_format(Path::new("test.json")));
         assert!(DataProcessor::is_supported_format(Path::new("test.sql")));
+        assert!(DataProcessor::is_supported_format(Path::new("test.xlsx")));
+        assert!(DataProcessor::is_supported_format(Path::new("test.xls")));
         assert!(!DataProcessor::is_supported_format(Path::new("test.txt")));
         assert!(!DataProcessor::is_supported_format(Path::new("test")));
     }
@@ -2114,6 +2116,21 @@ mod tests {
         assert_eq!(data_info.row_count, 2);
         assert_eq!(data_info.column_count(), 3);
         assert_eq!(data_info.column_names(), vec!["name", "age", "city"]);
+    }
+
+    #[test]
+    fn test_excel_loading() {
+        // Test with the actual test fixtures
+        let excel_path = Path::new("tests/fixtures/data/simple.xlsx");
+        
+        if excel_path.exists() {
+            let mut processor = DataProcessor::new().unwrap();
+            let data_info = processor.load_file(excel_path).unwrap();
+            
+            assert_eq!(data_info.row_count, 3);
+            assert_eq!(data_info.column_count(), 3);
+            assert_eq!(data_info.column_names(), vec!["name", "age", "city"]);
+        }
     }
 
     #[test]

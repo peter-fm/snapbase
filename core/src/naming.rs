@@ -78,6 +78,7 @@ impl SnapshotNamer {
             "sql" => "sql",
             "tsv" => "tsv",
             "txt" => "txt",
+            "xlsx" | "xls" => "excel",
             _ => "data",
         }.to_string()
     }

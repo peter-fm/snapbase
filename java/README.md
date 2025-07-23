@@ -1,18 +1,17 @@
 # Snapbase Java API
 
-Java bindings for the Snapbase core library, providing snapshot-based structured data diff functionality.
+Java bindings for the Snaphase - a queryable time machine for your structured data from entire databases and SQL queries to Excel, CSV, parquet and JSON files. Snapbase is data version control augmented by SQL. Supports both local and cloud snapshot storage.
 
 ## Features
 
-- **🚀 Zero-Copy Arrow Performance**: Ultra-fast querying with Apache Arrow integration
-- **Workspace Management**: Initialize and manage Snapbase workspaces
-- **Snapshot Creation**: Create immutable snapshots of structured data files
-- **Change Detection**: Detect schema, column, and row-level changes between data versions
-- **Historical Querying**: Query historical snapshots using SQL with columnar data access
-- **Async Support**: Asynchronous operations with CompletableFuture
-- **Multiple Formats**: Support for CSV, JSON, Parquet, and SQL files
-- **Storage Backends**: Local filesystem and S3 cloud storage
-- **Memory Efficient**: Direct columnar data access without serialization overhead
+🚀 **Zero-Copy Arrow Performance**: Ultra-fast querying with Apache Arrow integration
+✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
+🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
+📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
+☁️ **Cloud storage support** - Store snapshots locally or in S3  
+📈 **SQL querying** - Query across snapshots using SQL to monitor changes at the cell level over time.  
+⚡ **Performance optimized** - Powered by Rust and DuckDB.
+
 
 ## Requirements
 
@@ -84,9 +83,11 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/path/to/workspace")) 
     String result = workspace.createSnapshot("data.csv", "v1");
     System.out.println(result);
     
-    // Check status against baseline
-    String changes = workspace.status("data.csv", "v1");
-    System.out.println(changes);
+    // Check status against baseline - returns structured ChangeDetectionResult
+    ChangeDetectionResult result = workspace.status("data.csv", "v1");
+    System.out.println("Schema changes: " + result.getSchemaChanges().hasChanges());
+    System.out.println("Row changes: " + result.getRowChanges().hasChanges());
+    System.out.println("Total changes: " + result.getRowChanges().getTotalChanges());
     
     // Query historical data with zero-copy Arrow performance
     try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data LIMIT 10")) {
@@ -119,8 +120,7 @@ The main class for interacting with Snapbase functionality.
 - `CompletableFuture<String> createSnapshotAsync(String filePath, String name)` - Async snapshot creation
 
 #### Status Checking
-- `String status(String filePath, String baseline)` - Check status against baseline as JSON string
-- `JsonNode statusAsJson(String filePath, String baseline)` - Check status against baseline as parsed JSON
+- `ChangeDetectionResult status(String filePath, String baseline)` - Check status against baseline returning structured result
 
 #### Zero-Copy Arrow Querying
 - `VectorSchemaRoot query(String source, String sql)` - Query snapshots returning Arrow data (zero-copy)
@@ -134,8 +134,7 @@ The main class for interacting with Snapbase functionality.
 - `boolean snapshotExists(String name)` - Check if snapshot exists
 
 #### Comparison
-- `String diff(String source, String fromSnapshot, String toSnapshot)` - Compare snapshots
-- `JsonNode diffAsJson(String source, String fromSnapshot, String toSnapshot)` - Compare with parsed result
+- `ChangeDetectionResult diff(String source, String fromSnapshot, String toSnapshot)` - Compare snapshots returning structured result
 
 #### Utilities
 - `String getPath()` - Get workspace path
@@ -146,6 +145,79 @@ The main class for interacting with Snapbase functionality.
 ### SnapbaseException
 
 Exception thrown by Snapbase operations when errors occur.
+
+### Structured Result Objects
+
+#### ChangeDetectionResult
+
+Main result object returned by `status()` and `diff()` methods.
+
+**Methods:**
+- `SchemaChanges getSchemaChanges()` - Get schema-level changes
+- `RowChanges getRowChanges()` - Get row-level changes
+
+#### SchemaChanges
+
+Contains schema-level changes between snapshots.
+
+**Methods:**
+- `boolean hasChanges()` - Returns true if any schema changes exist
+- `ColumnOrderChange getColumnOrder()` - Get column order changes (nullable)
+- `List<ColumnAddition> getColumnsAdded()` - Get list of added columns
+- `List<ColumnRemoval> getColumnsRemoved()` - Get list of removed columns
+- `List<ColumnRename> getColumnsRenamed()` - Get list of renamed columns
+- `List<TypeChange> getTypeChanges()` - Get list of columns with changed data types
+
+#### RowChanges
+
+Contains row-level changes between snapshots.
+
+**Methods:**
+- `boolean hasChanges()` - Returns true if any row changes exist
+- `int getTotalChanges()` - Returns total number of changed rows
+- `List<RowModification> getModified()` - Get list of modified rows
+- `List<RowAddition> getAdded()` - Get list of added rows
+- `List<RowRemoval> getRemoved()` - Get list of removed rows
+
+#### Change Detail Objects
+
+##### ColumnAddition
+- `String getName()` - Column name
+- `String getDataType()` - Data type (e.g., "VARCHAR", "INTEGER")
+- `int getPosition()` - Position in schema
+- `boolean isNullable()` - Whether column allows null values
+- `String getDefaultValue()` - Default value (if any, nullable)
+
+##### ColumnRemoval
+- `String getName()` - Column name
+- `String getDataType()` - Data type
+- `int getPosition()` - Position in schema
+- `boolean isNullable()` - Whether column allowed null values
+
+##### ColumnRename
+- `String getFrom()` - Original column name
+- `String getTo()` - New column name
+
+##### TypeChange
+- `String getColumn()` - Column name
+- `String getFrom()` - Original data type
+- `String getTo()` - New data type
+
+##### RowModification
+- `int getRowIndex()` - Index of the modified row
+- `Map<String, CellChange> getChanges()` - Map of column names to cell changes
+
+##### CellChange
+- `String getBefore()` - Original cell value
+- `String getAfter()` - New cell value
+
+##### RowAddition
+- `int getRowIndex()` - Index of the added row
+- `Map<String, String> getData()` - Map of column names to values for the new row
+
+##### RowRemoval
+- `int getRowIndex()` - Index of the removed row
+- `Map<String, String> getData()` - Map of column names to values for the removed row
 
 ## Examples
 
@@ -168,21 +240,99 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/my/workspace")) {
 }
 ```
 
-### Status Checking
+### Change Detection and Analysis
+
+Snapbase now returns **structured objects** instead of JSON strings, providing type safety and better IDE support:
 
 ```java
+import com.snapbase.*;
+
 // Create baseline snapshot
 workspace.createSnapshot("customers.csv", "baseline");
 
 // ... modify the file ...
 
-// Check what changed against baseline
-JsonNode changes = workspace.statusAsJson("customers.csv", "baseline");
-if (changes.has("added_rows")) {
-    System.out.println("Added rows: " + changes.get("added_rows").size());
+// Check what changed against baseline - returns structured result
+ChangeDetectionResult result = workspace.status("customers.csv", "baseline");
+
+// Access schema changes with full type safety
+SchemaChanges schemaChanges = result.getSchemaChanges();
+if (schemaChanges.hasChanges()) {
+    System.out.println("Schema Changes Detected:");
+    
+    // Check for added columns
+    for (ColumnAddition addition : schemaChanges.getColumnsAdded()) {
+        System.out.println("  + Added column: " + addition.getName() + 
+                          " (" + addition.getDataType() + ")");
+    }
+    
+    // Check for removed columns
+    for (ColumnRemoval removal : schemaChanges.getColumnsRemoved()) {
+        System.out.println("  - Removed column: " + removal.getName() + 
+                          " (" + removal.getDataType() + ")");
+    }
+    
+    // Check for column renames
+    for (ColumnRename rename : schemaChanges.getColumnsRenamed()) {
+        System.out.println("  ~ Renamed column: " + rename.getFrom() + 
+                          " → " + rename.getTo());
+    }
+    
+    // Check for type changes
+    for (TypeChange typeChange : schemaChanges.getTypeChanges()) {
+        System.out.println("  ⚠ Type changed: " + typeChange.getColumn() + 
+                          " from " + typeChange.getFrom() + " to " + typeChange.getTo());
+    }
 }
-if (changes.has("modified_rows")) {
-    System.out.println("Modified rows: " + changes.get("modified_rows").size());
+
+// Access row changes with detailed information
+RowChanges rowChanges = result.getRowChanges();
+if (rowChanges.hasChanges()) {
+    System.out.println("\nRow Changes: " + rowChanges.getTotalChanges() + " total changes");
+    
+    // Analyze row additions
+    System.out.println("Added rows: " + rowChanges.getAdded().size());
+    for (RowAddition addition : rowChanges.getAdded()) {
+        System.out.println("  + Row " + addition.getRowIndex() + ": " + addition.getData());
+    }
+    
+    // Analyze row deletions
+    System.out.println("Removed rows: " + rowChanges.getRemoved().size());
+    for (RowRemoval removal : rowChanges.getRemoved()) {
+        System.out.println("  - Row " + removal.getRowIndex() + ": " + removal.getData());
+    }
+    
+    // Analyze row modifications with cell-level details
+    System.out.println("Modified rows: " + rowChanges.getModified().size());
+    for (RowModification modification : rowChanges.getModified()) {
+        System.out.println("  ~ Row " + modification.getRowIndex() + ":");
+        for (Map.Entry<String, CellChange> entry : modification.getChanges().entrySet()) {
+            CellChange cellChange = entry.getValue();
+            System.out.println("    " + entry.getKey() + ": '" + 
+                             cellChange.getBefore() + "' → '" + cellChange.getAfter() + "'");
+        }
+    }
+}
+```
+
+### Comparing Two Snapshots
+
+```java
+// Compare two specific snapshots
+ChangeDetectionResult result = workspace.diff("customers.csv", "baseline", "current");
+
+// Same structured access as status()
+System.out.println("Schema changes: " + result.getSchemaChanges().hasChanges());
+System.out.println("Row changes: " + result.getRowChanges().getTotalChanges());
+
+// Access all change details with type safety
+for (RowModification modification : result.getRowChanges().getModified()) {
+    System.out.println("Row " + modification.getRowIndex() + " changed:");
+    for (Map.Entry<String, CellChange> entry : modification.getChanges().entrySet()) {
+        CellChange change = entry.getValue();
+        System.out.println("  " + entry.getKey() + ": " + 
+                          change.getBefore() + " → " + change.getAfter());
+    }
 }
 ```
 

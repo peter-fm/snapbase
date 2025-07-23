@@ -784,7 +784,7 @@ impl StreamingChangeDetector {
         let (baseline_data, baseline_schema) = Self::load_data_from_source(baseline_source).await?;
         
         // Load current data
-        let (current_data, current_schema) = Self::load_data_from_source(current_source).await?;
+        let (current_data, _current_schema) = Self::load_data_from_source(current_source).await?;
         
         // Get original column count for filtering (exclude metadata)
         let original_column_count = if options.exclude_metadata_columns {
@@ -1025,6 +1025,7 @@ impl StreamingChangeDetector {
 
 /// Comprehensive change detection result
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct ChangeDetectionResult {
     pub schema_changes: SchemaChanges,
     pub row_changes: RowChanges,
@@ -1032,6 +1033,7 @@ pub struct ChangeDetectionResult {
 
 /// Schema-level changes
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct SchemaChanges {
     pub column_order: Option<ColumnOrderChange>,
     pub columns_added: Vec<ColumnAddition>,
@@ -1042,6 +1044,7 @@ pub struct SchemaChanges {
 
 /// Column order change
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct ColumnOrderChange {
     pub before: Vec<String>,
     pub after: Vec<String>,
@@ -1049,6 +1052,7 @@ pub struct ColumnOrderChange {
 
 /// Column addition
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct ColumnAddition {
     pub name: String,
     pub data_type: String,
@@ -1059,6 +1063,7 @@ pub struct ColumnAddition {
 
 /// Column removal
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct ColumnRemoval {
     pub name: String,
     pub data_type: String,
@@ -1068,6 +1073,7 @@ pub struct ColumnRemoval {
 
 /// Column rename
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct ColumnRename {
     pub from: String,
     pub to: String,
@@ -1075,6 +1081,7 @@ pub struct ColumnRename {
 
 /// Type change
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct TypeChange {
     pub column: String,
     pub from: String,
@@ -1083,6 +1090,7 @@ pub struct TypeChange {
 
 /// Row-level changes
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct RowChanges {
     pub modified: Vec<RowModification>,
     pub added: Vec<RowAddition>,
@@ -1091,6 +1099,7 @@ pub struct RowChanges {
 
 /// Row modification
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct RowModification {
     pub row_index: u64,
     pub changes: HashMap<String, CellChange>,
@@ -1098,6 +1107,7 @@ pub struct RowModification {
 
 /// Cell change
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct CellChange {
     pub before: String,
     pub after: String,
@@ -1105,6 +1115,7 @@ pub struct CellChange {
 
 /// Row addition
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct RowAddition {
     pub row_index: u64,
     pub data: HashMap<String, String>,
@@ -1112,6 +1123,7 @@ pub struct RowAddition {
 
 /// Row removal
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct RowRemoval {
     pub row_index: u64,
     pub data: HashMap<String, String>,
@@ -1646,6 +1658,235 @@ impl RowChanges {
     /// Get total number of changed rows
     pub fn total_changes(&self) -> usize {
         self.modified.len() + self.added.len() + self.removed.len()
+    }
+}
+
+// PyO3 implementations for Python API
+#[cfg(feature = "python")]
+mod python_bindings {
+    use super::*;
+    use pyo3::prelude::*;
+    use std::collections::HashMap;
+
+    #[pymethods]
+    impl ChangeDetectionResult {
+        #[getter]
+        fn schema_changes(&self) -> SchemaChanges {
+            self.schema_changes.clone()
+        }
+
+        #[getter]
+        fn row_changes(&self) -> RowChanges {
+            self.row_changes.clone()
+        }
+    }
+
+    #[pymethods]
+    impl SchemaChanges {
+        #[getter]
+        fn column_order(&self) -> Option<ColumnOrderChange> {
+            self.column_order.clone()
+        }
+
+        #[getter]
+        fn columns_added(&self) -> Vec<ColumnAddition> {
+            self.columns_added.clone()
+        }
+
+        #[getter]
+        fn columns_removed(&self) -> Vec<ColumnRemoval> {
+            self.columns_removed.clone()
+        }
+
+        #[getter]
+        fn columns_renamed(&self) -> Vec<ColumnRename> {
+            self.columns_renamed.clone()
+        }
+
+        #[getter]
+        fn type_changes(&self) -> Vec<TypeChange> {
+            self.type_changes.clone()
+        }
+
+        #[pyo3(name = "has_changes")]
+        fn py_has_changes_impl(&self) -> bool {
+            self.has_changes()
+        }
+    }
+
+    #[pymethods]
+    impl RowChanges {
+        #[getter]
+        fn modified(&self) -> Vec<RowModification> {
+            self.modified.clone()
+        }
+
+        #[getter]
+        fn added(&self) -> Vec<RowAddition> {
+            self.added.clone()
+        }
+
+        #[getter]
+        fn removed(&self) -> Vec<RowRemoval> {
+            self.removed.clone()
+        }
+
+        #[pyo3(name = "has_changes")]
+        fn py_has_changes_impl(&self) -> bool {
+            self.has_changes()
+        }
+
+        #[pyo3(name = "total_changes")]
+        fn py_total_changes_impl(&self) -> usize {
+            self.total_changes()
+        }
+    }
+
+    #[pymethods]
+    impl ColumnOrderChange {
+        #[getter]
+        fn before(&self) -> Vec<String> {
+            self.before.clone()
+        }
+
+        #[getter]
+        fn after(&self) -> Vec<String> {
+            self.after.clone()
+        }
+    }
+
+    #[pymethods]
+    impl ColumnAddition {
+        #[getter]
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+
+        #[getter]
+        fn data_type(&self) -> String {
+            self.data_type.clone()
+        }
+
+        #[getter]
+        fn position(&self) -> usize {
+            self.position
+        }
+
+        #[getter]
+        fn nullable(&self) -> bool {
+            self.nullable
+        }
+
+        #[getter]
+        fn default_value(&self) -> Option<String> {
+            self.default_value.clone()
+        }
+    }
+
+    #[pymethods]
+    impl ColumnRemoval {
+        #[getter]
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+
+        #[getter]
+        fn data_type(&self) -> String {
+            self.data_type.clone()
+        }
+
+        #[getter]
+        fn position(&self) -> usize {
+            self.position
+        }
+
+        #[getter]
+        fn nullable(&self) -> bool {
+            self.nullable
+        }
+    }
+
+    #[pymethods]
+    impl ColumnRename {
+        #[getter]
+        fn from(&self) -> String {
+            self.from.clone()
+        }
+
+        #[getter]
+        fn to(&self) -> String {
+            self.to.clone()
+        }
+    }
+
+    #[pymethods]
+    impl TypeChange {
+        #[getter]
+        fn column(&self) -> String {
+            self.column.clone()
+        }
+
+        #[getter]
+        fn from(&self) -> String {
+            self.from.clone()
+        }
+
+        #[getter]
+        fn to(&self) -> String {
+            self.to.clone()
+        }
+    }
+
+    #[pymethods]
+    impl RowModification {
+        #[getter]
+        fn row_index(&self) -> u64 {
+            self.row_index
+        }
+
+        #[getter]
+        fn changes(&self) -> HashMap<String, CellChange> {
+            self.changes.clone()
+        }
+    }
+
+    #[pymethods]
+    impl CellChange {
+        #[getter]
+        fn before(&self) -> String {
+            self.before.clone()
+        }
+
+        #[getter]
+        fn after(&self) -> String {
+            self.after.clone()
+        }
+    }
+
+    #[pymethods]
+    impl RowAddition {
+        #[getter]
+        fn row_index(&self) -> u64 {
+            self.row_index
+        }
+
+        #[getter]
+        fn data(&self) -> HashMap<String, String> {
+            self.data.clone()
+        }
+    }
+
+    #[pymethods]
+    impl RowRemoval {
+        #[getter]
+        fn row_index(&self) -> u64 {
+            self.row_index
+        }
+
+        #[getter]
+        fn data(&self) -> HashMap<String, String> {
+            self.data.clone()
+        }
     }
 }
 

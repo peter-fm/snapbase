@@ -2,19 +2,18 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Python bindings for snapbase - a snapshot-based structured data diff tool that detects schema, column-level, and cell-level changes between versions of structured datasets.
+Python bindings for Snapbase - a queryable time machine for your structured data from entire databases and SQL queries to Excel, CSV, parquet and JSON files. Snapbase is data version control augmented SQL. Supports both local and cloud snapshot storage.
 
 ## Features
 
+
+🚀 **Zero-Copy Arrow Performance**: Ultra-fast querying with Apache Arrow integration
 ✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
-📊 **Multiple format support** - CSV, JSON, Parquet, and SQL files  
+📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
 ☁️ **Cloud storage support** - Store snapshots locally or in S3  
-📤 **Export capability** - Export snapshots to CSV or Parquet files  
-📈 **SQL querying** - Query historical snapshots using SQL, returns high-performance Polars DataFrames  
-🏷️ **Automatic naming** - Configurable patterns for automatic snapshot naming  
-⚡ **Performance optimized** - Streaming processing for large datasets  
-🧹 **Storage management** - Archive cleanup and compression
+📈 **SQL querying** - Query across snapshots using SQL to monitor changes at the cell level over time.  
+⚡ **Performance optimized** - Powered by Rust and DuckDB.
 
 ## 📦 Installation
 
@@ -52,9 +51,11 @@ print(f"Created snapshot: {snapshot.name}")
 # Make changes to your data file, then create another snapshot
 updated_snapshot = workspace.create_snapshot("data.csv", name="updated")
 
-# Check status against baseline
-changes = workspace.status("data.csv", baseline="initial")
-print(f"Detected {len(changes)} changes")
+# Check status against baseline - returns structured ChangeDetectionResult
+result = workspace.status("data.csv", baseline="initial")
+print(f"Schema changes: {result.schema_changes.has_changes()}")
+print(f"Row changes: {result.row_changes.has_changes()}")
+print(f"Total row changes: {result.row_changes.total_changes()}")
 
 # List all snapshots
 snapshots = workspace.list_snapshots("data.csv")
@@ -181,6 +182,8 @@ If you're used to Pandas, Polars has a similar API but with better performance!
 
 #### Change Detection and Analysis
 
+Snapbase now returns **structured objects** instead of JSON strings, providing type safety and better IDE support:
+
 ```python
 import snapbase
 
@@ -193,18 +196,67 @@ workspace.create_snapshot("inventory.csv", name="baseline")
 
 # Create new snapshot and check status
 workspace.create_snapshot("inventory.csv", name="current")
-changes = workspace.status("inventory.csv", baseline="baseline")
+result = workspace.status("inventory.csv", baseline="baseline")
 
-# Analyze changes
-for change in changes:
-    if change.type == "row_added":
-        print(f"New row added: {change.data}")
-    elif change.type == "row_removed":
-        print(f"Row removed: {change.data}")
-    elif change.type == "cell_modified":
-        print(f"Cell changed: {change.column} from {change.old_value} to {change.new_value}")
-    elif change.type == "schema_change":
-        print(f"Schema change: {change.description}")
+# Access schema changes with full type safety
+schema_changes = result.schema_changes
+if schema_changes.has_changes():
+    print("Schema Changes Detected:")
+    
+    # Check for added columns
+    for col_addition in schema_changes.columns_added:
+        print(f"  + Added column: {col_addition.name} ({col_addition.data_type})")
+    
+    # Check for removed columns
+    for col_removal in schema_changes.columns_removed:
+        print(f"  - Removed column: {col_removal.name} ({col_removal.data_type})")
+    
+    # Check for column renames
+    for col_rename in schema_changes.columns_renamed:
+        print(f"  ~ Renamed column: {col_rename.from} → {col_rename.to}")
+    
+    # Check for type changes
+    for type_change in schema_changes.type_changes:
+        print(f"  ⚠ Type changed: {type_change.column} from {type_change.from} to {type_change.to}")
+
+# Access row changes with detailed information
+row_changes = result.row_changes
+if row_changes.has_changes():
+    print(f"\nRow Changes: {row_changes.total_changes()} total changes")
+    
+    # Analyze row additions
+    print(f"Added rows: {len(row_changes.added)}")
+    for addition in row_changes.added:
+        print(f"  + Row {addition.row_index}: {addition.data}")
+    
+    # Analyze row deletions
+    print(f"Removed rows: {len(row_changes.removed)}")
+    for removal in row_changes.removed:
+        print(f"  - Row {removal.row_index}: {removal.data}")
+    
+    # Analyze row modifications with cell-level details
+    print(f"Modified rows: {len(row_changes.modified)}")
+    for modification in row_changes.modified:
+        print(f"  ~ Row {modification.row_index}:")
+        for column, cell_change in modification.changes.items():
+            print(f"    {column}: '{cell_change.before}' → '{cell_change.after}'")
+```
+
+#### Comparing Two Snapshots
+
+```python
+# Compare two specific snapshots
+result = workspace.diff("inventory.csv", "baseline", "current")
+
+# Same structured access as status()
+print(f"Schema changes: {result.schema_changes.has_changes()}")
+print(f"Row changes: {result.row_changes.total_changes()}")
+
+# Access all change details with type safety
+for modification in result.row_changes.modified:
+    print(f"Row {modification.row_index} changed:")
+    for column, change in modification.changes.items():
+        print(f"  {column}: {change.before} → {change.after}")
 ```
 
 #### Export and Backup
@@ -259,14 +311,25 @@ List all snapshots, optionally filtered by file path.
 
 **Returns:** List of `Snapshot` objects
 
-##### `status(file_path: str, baseline: str = None) -> List[Change]`
+##### `status(file_path: str, baseline: str = None) -> ChangeDetectionResult`
 Check status of current file against a baseline snapshot.
 
 **Parameters:**
 - `file_path`: Path to the file to analyze
 - `baseline`: Name of baseline snapshot (uses latest if not provided)
 
-**Returns:** List of `Change` objects
+**Returns:** `ChangeDetectionResult` object with structured change information
+
+```python
+result = workspace.status("data.csv", "baseline")
+# Access schema changes
+schema_changes = result.schema_changes
+row_changes = result.row_changes
+
+# Check if changes exist
+if schema_changes.has_changes() or row_changes.has_changes():
+    print("Changes detected!")
+```
 
 ##### `query(file_path: str, sql: str, limit: int = None) -> polars.DataFrame`
 Execute SQL query against historical snapshots.
@@ -292,6 +355,23 @@ Export a snapshot to a file.
 - `snapshot_name`: Name of snapshot to export
 - `output_path`: Destination file path
 
+##### `diff(source: str, from_snapshot: str, to_snapshot: str) -> ChangeDetectionResult`
+Compare two specific snapshots.
+
+**Parameters:**
+- `source`: Source file path
+- `from_snapshot`: Name of the baseline snapshot
+- `to_snapshot`: Name of the comparison snapshot
+
+**Returns:** `ChangeDetectionResult` object with structured change information
+
+```python
+result = workspace.diff("data.csv", "v1", "v2")
+# Same structured access as status()
+for modification in result.row_changes.modified:
+    print(f"Row {modification.row_index} changed")
+```
+
 ##### `export_by_date(file_path: str, date: str, output_path: str)`
 Export the latest snapshot before a specific date.
 
@@ -311,17 +391,80 @@ Represents a snapshot with metadata.
 - `size`: File size in bytes
 - `schema`: Data schema information
 
-### `snapbase.Change`
+### `snapbase.ChangeDetectionResult`
 
-Represents a detected change between snapshots.
+Main result object returned by `status()` and `diff()` methods.
 
 #### Properties
-- `type`: Type of change ("row_added", "row_removed", "cell_modified", "schema_change")
-- `description`: Human-readable description
-- `column`: Column name (for cell changes)
-- `old_value`: Previous value (for cell changes)
-- `new_value`: New value (for cell changes)
-- `data`: Row data (for row changes)
+- `schema_changes`: `SchemaChanges` object containing schema-level changes
+- `row_changes`: `RowChanges` object containing row-level changes
+
+### `snapbase.SchemaChanges`
+
+Contains schema-level changes between snapshots.
+
+#### Properties
+- `column_order`: Optional `ColumnOrderChange` if column order changed
+- `columns_added`: List of `ColumnAddition` objects for new columns
+- `columns_removed`: List of `ColumnRemoval` objects for deleted columns  
+- `columns_renamed`: List of `ColumnRename` objects for renamed columns
+- `type_changes`: List of `TypeChange` objects for columns with changed data types
+
+#### Methods
+- `has_changes()`: Returns `True` if any schema changes exist
+
+### `snapbase.RowChanges`
+
+Contains row-level changes between snapshots.
+
+#### Properties
+- `modified`: List of `RowModification` objects for changed rows
+- `added`: List of `RowAddition` objects for new rows
+- `removed`: List of `RowRemoval` objects for deleted rows
+
+#### Methods
+- `has_changes()`: Returns `True` if any row changes exist
+- `total_changes()`: Returns total number of changed rows
+
+### Change Detail Objects
+
+#### `ColumnAddition`
+- `name`: Column name
+- `data_type`: Data type (e.g., "VARCHAR", "INTEGER")
+- `position`: Position in schema
+- `nullable`: Whether column allows null values
+- `default_value`: Default value (if any)
+
+#### `ColumnRemoval`
+- `name`: Column name
+- `data_type`: Data type
+- `position`: Position in schema
+- `nullable`: Whether column allowed null values
+
+#### `ColumnRename`
+- `from`: Original column name
+- `to`: New column name
+
+#### `TypeChange`
+- `column`: Column name
+- `from`: Original data type
+- `to`: New data type
+
+#### `RowModification`
+- `row_index`: Index of the modified row
+- `changes`: Dictionary of `{column_name: CellChange}` for modified cells
+
+#### `CellChange`
+- `before`: Original cell value
+- `after`: New cell value
+
+#### `RowAddition`
+- `row_index`: Index of the added row
+- `data`: Dictionary of `{column_name: value}` for the new row
+
+#### `RowRemoval`  
+- `row_index`: Index of the removed row
+- `data`: Dictionary of `{column_name: value}` for the removed row
 
 ## ⚙️ Configuration
 
