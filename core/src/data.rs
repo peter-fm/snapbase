@@ -114,35 +114,6 @@ impl DataProcessor {
         }
     }
 
-    /// Transform SQL query to use fully qualified table names for MySQL
-    fn transform_sql_for_mysql(&self, sql: &str) -> String {
-        if let (Some(DatabaseType::MySQL), Some(ref db_name)) = (&self.database_type, &self.database_name) {
-            // For MySQL connections, transform unqualified table references to fully qualified ones
-            // This prevents DuckDB's inconsistent identifier transformation
-            
-            // Simple pattern matching for common SQL patterns
-            // This handles basic cases like "FROM table_name" -> "FROM db_name.table_name"
-            use regex::Regex;
-            
-            // Match FROM clauses with unqualified table names
-            let from_pattern = Regex::new(r"\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)\b").unwrap();
-            let transformed = from_pattern.replace_all(sql, |caps: &regex::Captures| {
-                let table_name = &caps[1];
-                // Only transform if it's not already qualified (doesn't contain a dot)
-                if table_name.contains('.') {
-                    caps[0].to_string() // Already qualified, leave as is
-                } else {
-                    format!("FROM {}.{}", db_name, table_name)
-                }
-            });
-            
-            transformed.to_string()
-        } else {
-            // For non-MySQL connections, return SQL unchanged
-            sql.to_string()
-        }
-    }
-
 
     /// Create a new data processor with workspace configuration
     pub fn new_with_workspace(workspace: &crate::workspace::SnapbaseWorkspace) -> Result<Self> {
@@ -346,11 +317,9 @@ impl DataProcessor {
             ));
         }
         
-        // Transform the select query to use fully qualified table names for MySQL
-        let transformed_query = self.transform_sql_for_mysql(select_query.trim());
         
         // First, get the row count and column info without materializing all data
-        let count_query = format!("SELECT COUNT(*) FROM ({})", transformed_query);
+        let count_query = format!("SELECT COUNT(*) FROM ({})", select_query);
         let row_count: u64 = self.connection
             .prepare(&count_query)
             .map_err(|e| crate::error::SnapbaseError::data_processing(
@@ -361,22 +330,31 @@ impl DataProcessor {
                 format!("Failed to get row count: {e}")
             ))?;
         
-        // Get column information by creating a temporary view with LIMIT 0
-        let temp_view_sql = format!(
-            "CREATE OR REPLACE VIEW temp_schema_view AS SELECT * FROM ({}) AS query_result LIMIT 0",
-            transformed_query
-        );
-        
-        self.connection.execute(&temp_view_sql, [])
+        let describe_sql = format!("DESCRIBE SELECT * FROM ({}) AS t", select_query);
+        let mut stmt = self.connection.prepare(&describe_sql)
             .map_err(|e| crate::error::SnapbaseError::data_processing(
-                format!("Failed to create temporary view for schema: {e}")
+                format!("Failed to prepare describe query: {e}")
             ))?;
-        
-        // Get column information from the temporary view and cache it
-        let columns = self.get_column_info_from_view("schema_temp_view")?;
-        
-        // Cache the columns for streaming queries since we won't have data_view
-        self.cached_columns = Some(columns.clone());
+
+        let rows = stmt.query_map([], |row| {
+            Ok(ColumnInfo {
+                name: row.get::<_, String>(0)?,
+                data_type: row.get::<_, String>(1)?,
+                nullable: true, // DuckDB's DESCRIBE doesn't return nullability either
+            })
+        }).map_err(|e| crate::error::SnapbaseError::data_processing(
+            format!("Failed to query column info: {e}")
+        ))?;
+
+        let mut columns = Vec::new();
+        for row in rows {
+            columns.push(row.map_err(|e| crate::error::SnapbaseError::data_processing(
+                format!("Failed to process column info row: {e}")
+            ))?);
+        }
+
+        self.cached_columns = Some(columns.clone()); // if needed
+
         
         // Clean up temporary view
         self.connection.execute("DROP VIEW IF EXISTS schema_temp_view", [])
@@ -385,7 +363,7 @@ impl DataProcessor {
             ))?;
         
         // Store the transformed SELECT query for streaming use
-        self.streaming_query = Some(transformed_query);
+        self.streaming_query = Some(select_query);
         
         Ok(DataInfo {
             source: file_path.to_path_buf(),
