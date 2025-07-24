@@ -393,13 +393,6 @@ fn create_hive_snapshot(
         name: snapshot_name.to_string(),
         created: timestamp,
         source: input_path.to_string_lossy().to_string(),
-        source_hash: {
-            let source_content = std::fs::read_to_string(input_path)?;
-            use blake3::Hasher;
-            let mut hasher = Hasher::new();
-            hasher.update(source_content.as_bytes());
-            hasher.finalize().to_hex().to_string()
-        },
         row_count: data_info.row_count,
         column_count: data_info.columns.len(),
         columns: data_info.columns.clone(),
@@ -409,15 +402,6 @@ fn create_hive_snapshot(
         delta_from_parent: None,
         can_reconstruct_parent: false,
         source_path: Some(input_path.to_string_lossy().to_string()),
-        source_fingerprint: Some({
-            let source_content = std::fs::read_to_string(input_path)?;
-            use blake3::Hasher;
-            let mut hasher = Hasher::new();
-            hasher.update(input_path.to_string_lossy().as_bytes());
-            hasher.update(b":");
-            hasher.update(source_content.as_bytes());
-            format!("{}:{}", input_path.to_string_lossy(), hasher.finalize().to_hex())
-        }),
     };
     
     let metadata_json = serde_json::to_string_pretty(&metadata)?;

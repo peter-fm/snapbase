@@ -16,7 +16,6 @@ pub struct SnapshotMetadata {
     pub name: String,
     pub created: DateTime<Utc>,
     pub source: String,
-    pub source_hash: String,
     pub row_count: u64,
     pub column_count: usize,
     pub columns: Vec<ColumnInfo>,
@@ -33,8 +32,6 @@ pub struct SnapshotMetadata {
     // Source-aware fields for proper chain isolation
     #[serde(default)]
     pub source_path: Option<String>,
-    #[serde(default)]
-    pub source_fingerprint: Option<String>,
 }
 
 impl SnapshotMetadata {
@@ -189,13 +186,6 @@ impl SnapshotCreator {
             .to_string_lossy()
             .to_string();
         
-        let source_fingerprint = format!("{}:{}", 
-            canonical_source_path,
-            self.hash_computer.hash_value(&format!("{}:{}", 
-                canonical_source_path, 
-                data_info.row_count
-            ))
-        );
 
         // Create metadata
         let mut metadata = SnapshotMetadata {
@@ -203,7 +193,6 @@ impl SnapshotCreator {
             name: name.to_string(),
             created: Utc::now(),
             source: input_path.to_string_lossy().to_string(),
-            source_hash: self.hash_computer.hash_value(&std::fs::read_to_string(input_path).unwrap_or_default()),
             row_count: data_info.row_count,
             column_count: data_info.column_count(),
             columns: data_info.columns.clone(),
@@ -213,7 +202,6 @@ impl SnapshotCreator {
             delta_from_parent,
             can_reconstruct_parent: false,
             source_path: Some(canonical_source_path),
-            source_fingerprint: Some(source_fingerprint),
         };
 
         // Set can_reconstruct_parent flag if this snapshot has a delta
@@ -274,28 +262,12 @@ impl SnapshotCreator {
         std::fs::create_dir_all(&hive_dir)?;
         
         // Create metadata.json
-        let source_content = std::fs::read_to_string(&data_info.source)?;
-        let source_hash = {
-            use blake3::Hasher;
-            let mut hasher = Hasher::new();
-            hasher.update(source_content.as_bytes());
-            hasher.finalize().to_hex().to_string()
-        };
-        let source_fingerprint = {
-            use blake3::Hasher;
-            let mut hasher = Hasher::new();
-            hasher.update(data_info.source.to_string_lossy().as_bytes());
-            hasher.update(b":");
-            hasher.update(source_content.as_bytes());
-            format!("{}:{}", data_info.source.to_string_lossy(), hasher.finalize().to_hex())
-        };
         
         let metadata = serde_json::json!({
             "format_version": "2.0",
             "name": name,
             "created": chrono::Utc::now(),
             "source": data_info.source.to_string_lossy(),
-            "source_hash": source_hash,
             "row_count": data_info.row_count,
             "column_count": data_info.column_count(),
             "columns": data_info.columns,
@@ -303,7 +275,6 @@ impl SnapshotCreator {
             "sequence_number": 1, // Will be calculated properly
             "can_reconstruct_parent": false, // No deltas
             "source_path": data_info.source.to_string_lossy(),
-            "source_fingerprint": source_fingerprint,
         });
         
         let metadata_path = hive_dir.join("metadata.json");
@@ -942,7 +913,6 @@ mod tests {
             name: "test".to_string(),
             created: Utc::now(),
             source: "test.csv".to_string(),
-            source_hash: "abc123".to_string(),
             row_count: 100,
             column_count: 3,
             columns: Vec::new(),
@@ -952,7 +922,6 @@ mod tests {
             delta_from_parent: None,
             can_reconstruct_parent: false,
             source_path: Some("/path/to/test.csv".to_string()),
-            source_fingerprint: Some("test_fingerprint".to_string()),
         };
 
         let json = serde_json::to_string(&metadata).unwrap();
@@ -973,7 +942,6 @@ mod tests {
             name: "test".to_string(),
             created: Utc::now(),
             source: "test.csv".to_string(),
-            source_hash: "abc123".to_string(),
             row_count: 100,
             column_count: 3,
             columns: Vec::new(),
@@ -983,7 +951,6 @@ mod tests {
             delta_from_parent: None,
             can_reconstruct_parent: false,
             source_path: Some("/path/to/test.csv".to_string()),
-            source_fingerprint: Some("test_fingerprint".to_string()),
         };
 
         let json_content = serde_json::to_string_pretty(&metadata).unwrap();
