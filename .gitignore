@@ -31,5 +31,7 @@ logs/*
 snapbase.toml
 
 # Ignore compressed snapshot archives
-.snapbase/*.snapbase
+.snapbase/*
 testspace/*
+
+dist/*
