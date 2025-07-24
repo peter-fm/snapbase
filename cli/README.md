@@ -9,7 +9,7 @@ A queryable time machine for your structured data from entire databases and SQL 
 ✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
 📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
-☁️ **Cloud storage support** - Store snapshots locally or in S3  
+☁️ **Cloud storage support** - Store snapshots locally, in S3, or S3 Express One Zone (Directory Buckets)  
 📈 **SQL querying** - Query across snapshots using SQL to monitor changes at the cell level over time.  
 ⚡ **Performance optimized** - Powered by Rust and DuckDB.
 
@@ -217,6 +217,9 @@ snapbase config storage --backend local --local-path .snapbase
 # S3 storage - saves to current workspace
 snapbase config storage --backend s3 --s3-bucket my-bucket --s3-prefix snapbase/
 
+# S3 Express One Zone (Directory Buckets) for high-performance operations
+snapbase config storage --backend s3 --s3-bucket my-express-bucket --s3-express --s3-availability-zone use1-az5
+
 # Save to global config instead of workspace
 snapbase config storage --backend local --local-path .snapbase --global
 ```
@@ -237,6 +240,10 @@ export AWS_SECRET_ACCESS_KEY=your_secret_key
 export SNAPBASE_S3_BUCKET=my-bucket
 export SNAPBASE_S3_PREFIX=snapbase/
 export SNAPBASE_S3_REGION=us-west-2
+
+# For S3 Express One Zone (Directory Buckets)
+export SNAPBASE_S3_USE_EXPRESS=true
+export SNAPBASE_S3_AVAILABILITY_ZONE=use1-az5
 ```
 
 #### Snapshot Naming Configuration
@@ -692,12 +699,31 @@ default_name_pattern = "{source}_{date}_{seq}"
 Or for S3 storage:
 
 ```toml
-[storage.S3]
+[storage]
+backend = "s3"
+
+[storage.s3]
 bucket = "my-bucket"
 prefix = "snapbase/"
 region = "us-west-2"
-access_key_id = "your_access_key"    # Optional - can use env vars
-secret_access_key = "your_secret"   # Optional - can use env vars
+# access_key_id and secret_access_key can be set via environment variables
+
+[snapshot]
+default_name_pattern = "{source}_{format}_{seq}"
+```
+
+For S3 Express One Zone (Directory Buckets):
+
+```toml
+[storage]
+backend = "s3"
+
+[storage.s3]
+bucket = "my-express-bucket"
+prefix = "data/"
+region = "us-east-1"
+use_express = true
+availability_zone = "use1-az5"
 
 [snapshot]
 default_name_pattern = "{source}_{format}_{seq}"
@@ -753,7 +779,7 @@ export DB_NAME=mydb
    
    Large files are processed without loading into memory, providing excellent performance automatically.
 
-2. **Use S3 storage** for team collaboration and better scalability
+2. **Use S3 storage** for team collaboration and better scalability. For high-performance workloads, consider S3 Express One Zone (Directory Buckets) which provides up to 200k read TPS and 100k write TPS
 
 3. **If local, then clean up old snapshots** regularly:
    ```bash

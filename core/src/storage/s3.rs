@@ -11,22 +11,46 @@ pub struct S3Storage {
     bucket: String,
     prefix: String,
     _region: String,
+    use_express: bool,
+    availability_zone: Option<String>,
 }
 
 impl S3Storage {
-    pub async fn new(bucket: String, prefix: String, region: String) -> Result<Self> {
-        log::info!("🔧 Initializing S3 storage - bucket: {bucket}, prefix: {prefix}, region: {region}");
+    pub async fn new(bucket: String, prefix: String, region: String, use_express: bool, availability_zone: Option<String>) -> Result<Self> {
+        log::info!("🔧 Initializing S3 storage - bucket: {bucket}, prefix: {prefix}, region: {region}, express: {use_express}");
         
-        let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest())
+        let mut config_builder = aws_config::load_defaults(aws_config::BehaviorVersion::latest())
             .await
             .to_builder()
-            .region(aws_config::Region::new(region.clone()))
-            .build();
+            .region(aws_config::Region::new(region.clone()));
+            
+        // For S3 Express, configure the endpoint
+        if use_express {
+            if let Some(ref az) = availability_zone {
+                let endpoint = format!("https://s3express-{}.{}.amazonaws.com", az, region);
+                log::info!("🚀 Using S3 Express endpoint: {endpoint}");
+                config_builder = config_builder.endpoint_url(endpoint);
+            } else {
+                return Err(anyhow::anyhow!("Availability zone is required when using S3 Express"));
+            }
+        }
+        
+        let config = config_builder.build();
         let client = Client::new(&config);
         
         // Test S3 connection with a simple operation
         log::debug!("🔍 Testing S3 connection...");
-        match client.head_bucket().bucket(&bucket).send().await {
+        let actual_bucket = if use_express {
+            if let Some(ref az) = availability_zone {
+                format!("{}--{}--x-s3", bucket, az)
+            } else {
+                return Err(anyhow::anyhow!("Availability zone is required when using S3 Express"));
+            }
+        } else {
+            bucket.clone()
+        };
+        
+        match client.head_bucket().bucket(&actual_bucket).send().await {
             Ok(_) => {
                 log::info!("✅ S3 connection successful");
             }
@@ -49,7 +73,7 @@ impl S3Storage {
                     error_details.push("4. Check if you have access to the S3 bucket".to_string());
                 }
                 
-                return Err(anyhow::anyhow!("Failed to connect to S3 bucket '{}':\n{}", bucket, error_details.join("\n")));
+                return Err(anyhow::anyhow!("Failed to connect to S3 bucket '{}':\n{}", actual_bucket, error_details.join("\n")));
             }
         }
         
@@ -58,7 +82,22 @@ impl S3Storage {
             bucket,
             prefix,
             _region: region,
+            use_express,
+            availability_zone,
         })
+    }
+    
+    fn get_bucket_name(&self) -> String {
+        if self.use_express {
+            if let Some(ref az) = self.availability_zone {
+                format!("{}--{}--x-s3", self.bucket, az)
+            } else {
+                // This should not happen as we validate in constructor
+                self.bucket.clone()
+            }
+        } else {
+            self.bucket.clone()
+        }
     }
     
     fn get_key(&self, path: &str) -> String {
@@ -75,7 +114,7 @@ impl S3Storage {
 #[async_trait]
 impl StorageBackend for S3Storage {
     fn get_base_path(&self) -> String {
-        format!("s3://{}/{}", self.bucket, self.prefix)
+        format!("s3://{}/{}", self.get_bucket_name(), self.prefix)
     }
     
     async fn ensure_directory(&self, _path: &str) -> Result<()> {
@@ -110,25 +149,26 @@ impl StorageBackend for S3Storage {
                 }
             }
             
+            let bucket_name = self.get_bucket_name();
             match self.client
                 .put_object()
-                .bucket(&self.bucket)
+                .bucket(&bucket_name)
                 .key(&key)
                 .body(ByteStream::from(data.to_vec()))
                 .send()
                 .await {
                 Ok(_) => {
                     if let Some(pb) = progress_bar {
-                        pb.finish_with_message(format!("✅ S3 upload complete: s3://{}/{}", self.bucket, key));
+                        pb.finish_with_message(format!("✅ S3 upload complete: s3://{}/{}", bucket_name, key));
                     }
-                    log::info!("✅ Successfully wrote file to S3: s3://{}/{}", self.bucket, key);
+                    log::info!("✅ Successfully wrote file to S3: s3://{}/{}", bucket_name, key);
                     Ok(())
                 }
                 Err(e) => {
                     if let Some(pb) = progress_bar {
                         pb.finish_with_message(format!("❌ S3 upload failed: {e}"));
                     }
-                    log::error!("❌ Failed to write file to S3: s3://{}/{}: {}", self.bucket, key, e);
+                    log::error!("❌ Failed to write file to S3: s3://{}/{}: {}", bucket_name, key, e);
                     Err(e.into())
                 }
             }
@@ -149,25 +189,26 @@ impl StorageBackend for S3Storage {
                 }
             }
             
+            let bucket_name = self.get_bucket_name();
             match self.client
                 .put_object()
-                .bucket(&self.bucket)
+                .bucket(&bucket_name)
                 .key(&key)
                 .body(ByteStream::from(data.to_vec()))
                 .send()
                 .await {
                 Ok(_) => {
                     if let Some(pb) = progress_bar {
-                        pb.finish_with_message(format!("✅ S3 upload complete: s3://{}/{}", self.bucket, key));
+                        pb.finish_with_message(format!("✅ S3 upload complete: s3://{}/{}", bucket_name, key));
                     }
-                    log::info!("✅ Successfully wrote file to S3: s3://{}/{}", self.bucket, key);
+                    log::info!("✅ Successfully wrote file to S3: s3://{}/{}", bucket_name, key);
                     Ok(())
                 }
                 Err(e) => {
                     if let Some(pb) = progress_bar {
                         pb.finish_with_message(format!("❌ S3 upload failed: {e}"));
                     }
-                    log::error!("❌ Failed to write file to S3: s3://{}/{}: {}", self.bucket, key, e);
+                    log::error!("❌ Failed to write file to S3: s3://{}/{}: {}", bucket_name, key, e);
                     Err(e.into())
                 }
             }
@@ -176,10 +217,11 @@ impl StorageBackend for S3Storage {
     
     async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
         let key = self.get_key(path);
+        let bucket_name = self.get_bucket_name();
         
         let response = self.client
             .get_object()
-            .bucket(&self.bucket)
+            .bucket(&bucket_name)
             .key(&key)
             .send()
             .await?;
@@ -190,19 +232,20 @@ impl StorageBackend for S3Storage {
     
     async fn list_directories(&self, path: &str) -> Result<Vec<String>> {
         let prefix = self.get_key(&format!("{path}/"));
+        let bucket_name = self.get_bucket_name();
         
-        log::debug!("📋 Listing S3 directories - bucket: {}, prefix: {}, path: {}", self.bucket, prefix, path);
+        log::debug!("📋 Listing S3 directories - bucket: {}, prefix: {}, path: {}", bucket_name, prefix, path);
         
         let response = self.client
             .list_objects_v2()
-            .bucket(&self.bucket)
+            .bucket(&bucket_name)
             .prefix(&prefix)
             .delimiter("/")
             .send()
             .await
             .map_err(|e| {
-                log::error!("❌ S3 ListObjects failed for bucket '{}', prefix '{}': {}", self.bucket, prefix, e);
-                anyhow::anyhow!("Failed to list S3 directories in bucket '{}' with prefix '{}': {}", self.bucket, prefix, e)
+                log::error!("❌ S3 ListObjects failed for bucket '{}', prefix '{}': {}", bucket_name, prefix, e);
+                anyhow::anyhow!("Failed to list S3 directories in bucket '{}' with prefix '{}': {}", bucket_name, prefix, e)
             })?;
         
         let mut directories = Vec::new();
@@ -221,10 +264,11 @@ impl StorageBackend for S3Storage {
     
     async fn delete_file(&self, path: &str) -> Result<()> {
         let key = self.get_key(path);
+        let bucket_name = self.get_bucket_name();
         
         self.client
             .delete_object()
-            .bucket(&self.bucket)
+            .bucket(&bucket_name)
             .key(&key)
             .send()
             .await?;
@@ -237,10 +281,11 @@ impl StorageBackend for S3Storage {
     }
     
     fn get_duckdb_path(&self, path: &str) -> String {
+        let bucket_name = self.get_bucket_name();
         if self.prefix.is_empty() {
-            format!("s3://{}/{}", self.bucket, path)
+            format!("s3://{}/{}", bucket_name, path)
         } else {
-            format!("s3://{}/{}/{}", self.bucket, self.prefix, path)
+            format!("s3://{}/{}/{}", bucket_name, self.prefix, path)
         }
     }
     
@@ -294,10 +339,11 @@ impl StorageBackend for S3Storage {
     
     async fn file_exists(&self, path: &str) -> Result<bool> {
         let key = self.get_key(path);
+        let bucket_name = self.get_bucket_name();
         
         match self.client
             .head_object()
-            .bucket(&self.bucket)
+            .bucket(&bucket_name)
             .key(&key)
             .send()
             .await

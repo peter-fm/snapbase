@@ -70,6 +70,11 @@ pub struct S3StorageConfig {
     pub bucket: String,
     pub prefix: String,
     pub region: String,
+    /// Enable S3 Express One Zone (Directory Buckets) support
+    #[serde(default)]
+    pub use_express: bool,
+    /// Availability zone for S3 Express (e.g., "use1-az5")
+    pub availability_zone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +98,8 @@ pub enum StorageConfig {
         region: String,
         access_key_id: Option<String>,
         secret_access_key: Option<String>,
+        use_express: bool,
+        availability_zone: Option<String>,
     },
 }
 
@@ -131,6 +138,8 @@ impl Default for S3StorageConfig {
             bucket: "my-snapbase-bucket".to_string(),
             prefix: "project-name/".to_string(),
             region: "us-west-2".to_string(),
+            use_express: false,
+            availability_zone: None,
         }
     }
 }
@@ -164,6 +173,8 @@ impl StorageConfigToml {
                     region: s3_config.region.clone(),
                     access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
                     secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
+                    use_express: s3_config.use_express,
+                    availability_zone: s3_config.availability_zone.clone(),
                 }
             },
         }
@@ -178,13 +189,15 @@ impl StorageConfigToml {
                 }),
                 s3: None,
             },
-            StorageConfig::S3 { bucket, prefix, region, .. } => Self {
+            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => Self {
                 backend: StorageBackend::S3,
                 local: None,
                 s3: Some(S3StorageConfig {
                     bucket: bucket.clone(),
                     prefix: prefix.clone(),
                     region: region.clone(),
+                    use_express: *use_express,
+                    availability_zone: availability_zone.clone(),
                 }),
             },
         }
@@ -259,6 +272,8 @@ pub fn get_storage_config_from_env_or_default() -> Result<StorageConfig> {
             region: std::env::var("SNAPBASE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
             access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
             secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+            use_express: std::env::var("SNAPBASE_S3_USE_EXPRESS").map(|v| v.to_lowercase() == "true").unwrap_or(false),
+            availability_zone: std::env::var("SNAPBASE_S3_AVAILABILITY_ZONE").ok(),
         });
     }
     
@@ -290,6 +305,8 @@ pub fn get_storage_config_project_first() -> Result<StorageConfig> {
             region: std::env::var("SNAPBASE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
             access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
             secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+            use_express: std::env::var("SNAPBASE_S3_USE_EXPRESS").map(|v| v.to_lowercase() == "true").unwrap_or(false),
+            availability_zone: std::env::var("SNAPBASE_S3_AVAILABILITY_ZONE").ok(),
         });
     }
     
@@ -524,6 +541,48 @@ mod tests {
     }
     
     #[test]
+    fn test_s3_express_config() {
+        // Test S3 Express configuration
+        let toml_content = r#"
+[storage]
+backend = "s3"
+
+[storage.s3]
+bucket = "my-express-bucket"
+prefix = "data/"
+region = "us-east-1"
+use_express = true
+availability_zone = "use1-az5"
+
+[snapshot]
+default_name_pattern = "{source}_{seq}"
+"#;
+        
+        let config: Config = toml::from_str(toml_content).unwrap();
+        assert_eq!(config.storage.backend, StorageBackend::S3);
+        
+        let s3_config = config.storage.s3.as_ref().unwrap();
+        assert_eq!(s3_config.bucket, "my-express-bucket");
+        assert_eq!(s3_config.prefix, "data/");
+        assert_eq!(s3_config.region, "us-east-1");
+        assert_eq!(s3_config.use_express, true);
+        assert_eq!(s3_config.availability_zone, Some("use1-az5".to_string()));
+        
+        // Test runtime conversion
+        let runtime_config = config.storage.to_runtime();
+        match runtime_config {
+            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
+                assert_eq!(bucket, "my-express-bucket");
+                assert_eq!(prefix, "data/");
+                assert_eq!(region, "us-east-1");
+                assert_eq!(use_express, true);
+                assert_eq!(availability_zone, Some("use1-az5".to_string()));
+            }
+            _ => panic!("Expected S3 config"),
+        }
+    }
+    
+    #[test]
     fn test_config_with_databases() {
         let mut config = Config::default();
         
@@ -575,13 +634,45 @@ default_name_pattern = "{source}_{seq}"
         // Test that to_runtime() works correctly
         let runtime_config = config.storage.to_runtime();
         match runtime_config {
-            StorageConfig::S3 { bucket, prefix, region, .. } => {
+            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
                 assert_eq!(bucket, "my-bucket");
                 assert_eq!(prefix, "my-prefix");
                 assert_eq!(region, "us-west-2");
+                assert_eq!(use_express, false);
+                assert_eq!(availability_zone, None);
             }
             _ => panic!("Expected S3 config"),
         }
+    }
+    
+    #[test]
+    fn test_s3_express_environment_variables() {
+        // Test S3 Express configuration from environment variables
+        std::env::set_var("SNAPBASE_S3_BUCKET", "my-express-bucket");
+        std::env::set_var("SNAPBASE_S3_PREFIX", "test-prefix");
+        std::env::set_var("SNAPBASE_S3_REGION", "us-east-1");
+        std::env::set_var("SNAPBASE_S3_USE_EXPRESS", "true");
+        std::env::set_var("SNAPBASE_S3_AVAILABILITY_ZONE", "use1-az4");
+        
+        let config = get_storage_config_from_env_or_default().unwrap();
+        
+        match config {
+            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
+                assert_eq!(bucket, "my-express-bucket");
+                assert_eq!(prefix, "test-prefix");
+                assert_eq!(region, "us-east-1");
+                assert_eq!(use_express, true);
+                assert_eq!(availability_zone, Some("use1-az4".to_string()));
+            }
+            _ => panic!("Expected S3 config"),
+        }
+        
+        // Cleanup
+        std::env::remove_var("SNAPBASE_S3_BUCKET");
+        std::env::remove_var("SNAPBASE_S3_PREFIX");
+        std::env::remove_var("SNAPBASE_S3_REGION");
+        std::env::remove_var("SNAPBASE_S3_USE_EXPRESS");
+        std::env::remove_var("SNAPBASE_S3_AVAILABILITY_ZONE");
     }
     
     #[test]

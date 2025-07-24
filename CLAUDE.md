@@ -105,7 +105,7 @@ uv run python <args>
 **Storage Layer:**
 - `src/storage/mod.rs` - Storage backend abstraction
 - `src/storage/local.rs` - Local filesystem storage implementation
-- `src/storage/s3.rs` - S3 cloud storage implementation
+- `src/storage/s3.rs` - S3 cloud storage implementation with Directory Buckets (S3 Express One Zone) support
 - Uses Hive-style partitioning: `sources/{filename}/snapshot_name={name}/snapshot_timestamp={timestamp}/`
 
 **Snapshot Management:**
@@ -126,7 +126,7 @@ uv run python <args>
 
 1. **Snapshot-based tracking** - Creates immutable snapshots of data with metadata
 2. **Hive-style storage** - Organizes data in partitioned directory structure
-3. **Multiple storage backends** - Local filesystem and S3 support
+3. **Multiple storage backends** - Local filesystem, S3, and S3 Express One Zone (Directory Buckets) support
 4. **Change detection** - Detects schema changes, row additions/deletions, and cell-level modifications
 5. **Rollback capability** - Can restore files to previous snapshot states (full data mode only)
 6. **SQL querying** - Query historical snapshots using SQL
@@ -145,6 +145,49 @@ uv run python <args>
 - Workspace initialization creates `.snapbase/` directory (local) or S3 prefix structure
 - Supports `.env` files for environment variable configuration
 - DuckDB configuration handled in `src/duckdb_config.rs`
+
+#### S3 Express One Zone (Directory Buckets) Configuration
+
+For high-performance operations, Snapbase supports AWS S3 Express One Zone (Directory Buckets):
+
+**CLI Configuration:**
+```bash
+# Configure S3 Express with CLI
+snapbase config storage --backend s3 \
+  --s3-bucket my-express-bucket \
+  --s3-prefix data/ \
+  --s3-region us-east-1 \
+  --s3-express \
+  --s3-availability-zone use1-az5
+```
+
+**Environment Variables:**
+```bash
+export SNAPBASE_S3_BUCKET="my-express-bucket"
+export SNAPBASE_S3_PREFIX="data/"
+export SNAPBASE_S3_REGION="us-east-1"
+export SNAPBASE_S3_USE_EXPRESS="true"
+export SNAPBASE_S3_AVAILABILITY_ZONE="use1-az5"
+```
+
+**Configuration File (snapbase.toml):**
+```toml
+[storage]
+backend = "s3"
+
+[storage.s3]
+bucket = "my-express-bucket"
+prefix = "data/"
+region = "us-east-1"
+use_express = true
+availability_zone = "use1-az5"
+```
+
+**Notes:**
+- S3 Express requires the availability zone to be specified
+- Directory bucket names are automatically formatted as `bucket-base--zone-id--x-s3`
+- Best performance achieved when EC2 instance is in the same AZ as the bucket
+- Provides up to 200k read TPS and 100k write TPS for high-performance workloads
 
 ## Important Implementation Details
 

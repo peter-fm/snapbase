@@ -9,7 +9,7 @@ Python bindings for Snapbase - a queryable time machine for your structured data
 ✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata    
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
 📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
-☁️ **Cloud storage support** - Store snapshots locally or in S3  
+☁️ **Cloud storage support** - Store snapshots locally, in S3, or S3 Express One Zone (Directory Buckets)  
 📈 **SQL querying** - Query across snapshots using SQL to monitor changes at the cell level over time.  
 ⚡ **Performance optimized** - Powered by Rust and DuckDB.
 
@@ -97,6 +97,16 @@ workspace = snapbase.Workspace(
     storage_backend="s3",
     s3_bucket="my-bucket",
     s3_prefix="snapshots/"
+)
+
+# S3 Express One Zone (Directory Buckets) for high-performance operations
+workspace = snapbase.Workspace(
+    "./data", 
+    storage_backend="s3",
+    s3_bucket="my-express-bucket",
+    s3_prefix="data/",
+    s3_express=True,
+    s3_availability_zone="use1-az5"
 )
 ```
 
@@ -504,6 +514,17 @@ workspace = snapbase.Workspace(
     s3_prefix="snapshots/",
     s3_region="us-west-2"
 )
+
+# S3 Express One Zone (Directory Buckets)
+workspace = snapbase.Workspace(
+    "./data",
+    storage_backend="s3",
+    s3_bucket="my-express-bucket",
+    s3_prefix="data/",
+    s3_region="us-east-1",
+    s3_express=True,
+    s3_availability_zone="use1-az5"
+)
 ```
 
 **Workspace vs Global Configuration:**
@@ -528,12 +549,31 @@ default_name_pattern = "{source}_{date}_{seq}"
 Or for S3 storage:
 
 ```toml
-[storage.S3]
+[storage]
+backend = "s3"
+
+[storage.s3]
 bucket = "my-bucket"
 prefix = "snapbase/"
 region = "us-west-2"
-access_key_id = "your_access_key"    # Optional - can use env vars
-secret_access_key = "your_secret"   # Optional - can use env vars
+# access_key_id and secret_access_key can be set via environment variables
+
+[snapshot]
+default_name_pattern = "{source}_{format}_{seq}"
+```
+
+For S3 Express One Zone (Directory Buckets):
+
+```toml
+[storage]
+backend = "s3"
+
+[storage.s3]
+bucket = "my-express-bucket"
+prefix = "data/"
+region = "us-east-1"
+use_express = true
+availability_zone = "use1-az5"
 
 [snapshot]
 default_name_pattern = "{source}_{format}_{seq}"
@@ -554,6 +594,10 @@ export AWS_SECRET_ACCESS_KEY=your_secret_key
 export SNAPBASE_S3_BUCKET=my-bucket
 export SNAPBASE_S3_PREFIX=snapbase/
 export SNAPBASE_S3_REGION=us-west-2
+
+# For S3 Express One Zone (Directory Buckets)
+export SNAPBASE_S3_USE_EXPRESS=true
+export SNAPBASE_S3_AVAILABILITY_ZONE=use1-az5
 
 # Snapshot naming configuration
 export SNAPBASE_DEFAULT_NAME_PATTERN={source}_{date}_{seq}
@@ -694,7 +738,7 @@ def monitor_api_endpoint():
 ## ⚡ Performance Tips
 
 1. **Use Parquet for large datasets** - Better compression and query performance
-2. **Configure S3 storage** for team collaboration and scalability
+2. **Configure S3 storage** for team collaboration and scalability. For high-performance workloads, consider S3 Express One Zone (Directory Buckets) which provides up to 200k read TPS and 100k write TPS
 3. **Use SQL summaries** for very large files instead of full snapshots
 4. **Clean up old snapshots** regularly to save storage space
 

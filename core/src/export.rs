@@ -131,20 +131,9 @@ impl UnifiedExporter {
         // Configure DuckDB for the storage backend (S3 or local)
         query_engine::configure_duckdb_for_storage(&self.connection, &storage_config)?;
 
-        // Build the source path based on storage configuration
-        let base_path = match &storage_config {
-            crate::config::StorageConfig::S3 { bucket, prefix, .. } => {
-                let prefix_part = if !prefix.is_empty() {
-                    format!("{}/", prefix.trim_end_matches('/'))
-                } else {
-                    String::new()
-                };
-                format!("s3://{bucket}/{prefix_part}sources/{source_file}/**/*.parquet")
-            }
-            crate::config::StorageConfig::Local { path } => {
-                format!("{}/sources/{source_file}/**/*.parquet", path.display())
-            }
-        };
+        // Build the source path using storage backend's get_duckdb_path method
+        // This ensures proper S3 Express directory bucket naming
+        let base_path = self.workspace.storage().get_duckdb_path(&format!("sources/{source_file}/**/*.parquet"));
 
         // Create the view with Hive-style partitioning
         let mut view_sql = format!(

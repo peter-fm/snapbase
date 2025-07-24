@@ -21,6 +21,18 @@ path = ".snapbase"  # Directory to store snapshots
 # # AWS credentials are read from environment variables:
 # # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 
+# Option 3: S3 Express One Zone (Directory Buckets) for high-performance operations
+# [storage.s3]
+# bucket = "my-express-bucket"
+# prefix = "data/"
+# region = "us-east-1"
+# use_express = true
+# availability_zone = "use1-az5"  # Required when use_express = true
+# 
+# # Note: S3 Express provides up to 200k read TPS and 100k write TPS
+# # Best performance when EC2 instance is in the same availability zone
+# # Directory bucket names are automatically formatted as: bucket-base--zone-id--x-s3
+
 # Snapshot naming configuration
 [snapshot]
 default_name_pattern = "{source}_{format}_{seq}"

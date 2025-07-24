@@ -8,7 +8,7 @@ Java bindings for the Snaphase - a queryable time machine for your structured da
 ✨ **Snapshot-based tracking** - Create immutable snapshots of your data with metadata  
 🔍 **Comprehensive change detection** - Detect schema changes, row additions/deletions, and cell-level modifications  
 📊 **Multiple format support** - Databases, SQL queries, Excel, CSV, JSON and Parquet files  
-☁️ **Cloud storage support** - Store snapshots locally or in S3  
+☁️ **Cloud storage support** - Store snapshots locally, in S3, or S3 Express One Zone (Directory Buckets)  
 📈 **SQL querying** - Query across snapshots using SQL to monitor changes at the cell level over time.  
 ⚡ **Performance optimized** - Powered by Rust and DuckDB.
 
@@ -457,12 +457,27 @@ path = ".snapbase"
 
 #### S3 Storage
 ```toml
-[storage.S3]
+[storage]
+backend = "s3"
+
+[storage.s3]
 bucket = "my-bucket"
 prefix = "snapshots/"
 region = "us-west-2"
-access_key_id = "your_access_key"    # Optional - can use env vars
-secret_access_key = "your_secret"   # Optional - can use env vars
+# access_key_id and secret_access_key can be set via environment variables
+```
+
+#### S3 Express One Zone (Directory Buckets)
+```toml
+[storage]
+backend = "s3"
+
+[storage.s3]
+bucket = "my-express-bucket"
+prefix = "data/"
+region = "us-east-1"
+use_express = true
+availability_zone = "use1-az5"
 ```
 
 **Workspace vs Global Configuration:**
@@ -487,12 +502,31 @@ default_name_pattern = "{source}_{date}_{seq}"
 Or for S3 storage:
 
 ```toml
-[storage.S3]
+[storage]
+backend = "s3"
+
+[storage.s3]
 bucket = "my-bucket"
 prefix = "snapbase/"
 region = "us-west-2"
-access_key_id = "your_access_key"    # Optional - can use env vars
-secret_access_key = "your_secret"   # Optional - can use env vars
+# access_key_id and secret_access_key can be set via environment variables
+
+[snapshot]
+default_name_pattern = "{source}_{format}_{seq}"
+```
+
+For S3 Express One Zone (Directory Buckets):
+
+```toml
+[storage]
+backend = "s3"
+
+[storage.s3]
+bucket = "my-express-bucket"
+prefix = "data/"
+region = "us-east-1"
+use_express = true
+availability_zone = "use1-az5"
 
 [snapshot]
 default_name_pattern = "{source}_{format}_{seq}"
@@ -513,6 +547,10 @@ export AWS_SECRET_ACCESS_KEY=your_secret_key
 export SNAPBASE_S3_BUCKET=my-bucket
 export SNAPBASE_S3_PREFIX=snapbase/
 export SNAPBASE_S3_REGION=us-west-2
+
+# For S3 Express One Zone (Directory Buckets)
+export SNAPBASE_S3_USE_EXPRESS=true
+export SNAPBASE_S3_AVAILABILITY_ZONE=use1-az5
 
 # Snapshot naming configuration
 export SNAPBASE_DEFAULT_NAME_PATTERN={source}_{date}_{seq}

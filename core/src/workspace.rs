@@ -705,11 +705,13 @@ pub async fn create_storage_backend(config: &StorageConfig) -> Result<Arc<dyn St
         StorageConfig::Local { path } => {
             Ok(Arc::new(LocalStorage::new(path.clone())))
         }
-        StorageConfig::S3 { bucket, prefix, region, .. } => {
+        StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
             let s3_storage = S3Storage::new(
                 bucket.clone(),
                 prefix.clone(),
                 region.clone(),
+                *use_express,
+                availability_zone.clone(),
             ).await?;
             Ok(Arc::new(s3_storage))
         }

@@ -1448,10 +1448,12 @@ fn config_command(workspace_path: Option<&Path>, command: &crate::cli::ConfigCom
             s3_bucket, 
             s3_prefix, 
             s3_region, 
+            s3_express,
+            s3_availability_zone,
             local_path,
             global
         } => {
-            configure_storage(workspace_path, backend, s3_bucket, s3_prefix, s3_region, local_path, *global)
+            configure_storage(workspace_path, backend, s3_bucket, s3_prefix, s3_region, *s3_express, s3_availability_zone, local_path, *global)
         }
         crate::cli::ConfigCommand::Show => {
             show_current_config()
@@ -1468,6 +1470,8 @@ fn configure_storage(
     s3_bucket: &Option<String>,
     s3_prefix: &Option<String>,
     s3_region: &Option<String>,
+    s3_express: bool,
+    s3_availability_zone: &Option<String>,
     local_path: &Option<String>,
     global: bool,
 ) -> Result<()> {
@@ -1506,12 +1510,27 @@ fn configure_storage(
                 .or_else(|| std::env::var("SNAPBASE_S3_REGION").ok())
                 .unwrap_or_else(|| "us-east-1".to_string());
             
+            // Handle S3 Express configuration
+            let use_express = s3_express || std::env::var("SNAPBASE_S3_USE_EXPRESS").map(|v| v.to_lowercase() == "true").unwrap_or(false);
+            let availability_zone = if use_express {
+                let az = s3_availability_zone.clone()
+                    .or_else(|| std::env::var("SNAPBASE_S3_AVAILABILITY_ZONE").ok());
+                if az.is_none() {
+                    return Err(SnapbaseError::invalid_input("Availability zone is required when using S3 Express. Provide it via --s3-availability-zone argument or set SNAPBASE_S3_AVAILABILITY_ZONE environment variable".to_string()));
+                }
+                az
+            } else {
+                s3_availability_zone.clone()
+            };
+            
             StorageConfig::S3 {
                 bucket,
                 prefix,
                 region,
                 access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
                 secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+                use_express,
+                availability_zone,
             }
         }
     };
@@ -1558,11 +1577,19 @@ fn show_config(config: &config::StorageConfig) {
             println!("  Backend: Local");
             println!("  Path: {}", path.display());
         }
-        config::StorageConfig::S3 { bucket, prefix, region, .. } => {
+        config::StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
             println!("  Backend: S3");
             println!("  Bucket: {bucket}");
             println!("  Prefix: {prefix}");
             println!("  Region: {region}");
+            if *use_express {
+                println!("  S3 Express: Enabled");
+                if let Some(az) = availability_zone {
+                    println!("  Availability Zone: {az}");
+                }
+            } else {
+                println!("  S3 Express: Disabled");
+            }
         }
     }
 }

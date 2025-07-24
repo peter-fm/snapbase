@@ -87,7 +87,9 @@ mod tests {
             let s3_storage = S3Storage::new(
                 "test-bucket".to_string(),
                 "test-prefix".to_string(),
-                "us-east-1".to_string()
+                "us-east-1".to_string(),
+                false,
+                None
             ).await;
             
             if let Ok(s3_storage) = s3_storage {

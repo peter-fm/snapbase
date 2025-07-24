@@ -215,6 +215,14 @@ pub enum ConfigCommand {
         #[arg(long)]
         s3_region: Option<String>,
         
+        /// Enable S3 Express One Zone (Directory Buckets) for high-performance operations
+        #[arg(long)]
+        s3_express: bool,
+        
+        /// Availability zone for S3 Express (e.g., "use1-az5", required if s3_express is true)
+        #[arg(long, requires = "s3_express")]
+        s3_availability_zone: Option<String>,
+        
         /// Local storage path (optional, defaults to .snapbase)
         #[arg(long)]
         local_path: Option<String>,

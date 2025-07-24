@@ -9,7 +9,7 @@ pub fn configure_duckdb_for_storage(
     config: &StorageConfig,
 ) -> Result<()> {
     match config {
-        StorageConfig::S3 { region, .. } => {
+        StorageConfig::S3 { region, use_express, availability_zone, .. } => {
             // Ensure .env file is loaded before accessing credentials
             if let Ok(current_dir) = std::env::current_dir() {
                 let env_file = current_dir.join(".env");
@@ -66,14 +66,31 @@ pub fn configure_duckdb_for_storage(
                 connection.execute(&format!("SET s3_session_token='{session_token}'"), [])?;
             }
             
-            // Optional: Configure endpoint for S3-compatible services
-            if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+            // Configure endpoint for S3 Express or S3-compatible services
+            if *use_express {
+                if let Some(ref az) = availability_zone {
+                    let endpoint = format!("s3express-{}.{}.amazonaws.com", az, region);
+                    connection.execute(&format!("SET s3_endpoint='{endpoint}'"), [])?;
+                } else {
+                    log::warn!("⚠️  S3 Express enabled but no availability zone specified");
+                }
+            } else if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
                 connection.execute(&format!("SET s3_endpoint='{endpoint}'"), [])?;
             }
             
             // Test S3 connection by trying to list the bucket
-            let test_query = format!("SELECT * FROM read_parquet('s3://{}/non-existent-test-file.parquet') LIMIT 1", 
-                                    if let StorageConfig::S3 { bucket, .. } = config { bucket } else { "" });
+            let bucket_name = if *use_express {
+                if let Some(ref az) = availability_zone {
+                    if let StorageConfig::S3 { bucket, .. } = config {
+                        format!("{}--{}--x-s3", bucket, az)
+                    } else { "".to_string() }
+                } else {
+                    if let StorageConfig::S3 { bucket, .. } = config { bucket.clone() } else { "".to_string() }
+                }
+            } else {
+                if let StorageConfig::S3 { bucket, .. } = config { bucket.clone() } else { "".to_string() }
+            };
+            let test_query = format!("SELECT * FROM read_parquet('s3://{}/non-existent-test-file.parquet') LIMIT 1", bucket_name);
             match connection.execute(&test_query, []) {
                 Ok(_) => log::info!("✅ S3 connection test passed"),
                 Err(e) => {
@@ -120,10 +137,9 @@ pub fn register_hive_view(
     source: &str,
     view_name: &str,
 ) -> Result<()> {
-    // Build query path for Hive partitioning (works for both local and S3)
-    let query_path = format!("{}/sources/{}/*/*/data.parquet", 
-                            workspace.storage().get_base_path(), 
-                            source);
+    // Build query path for Hive partitioning using storage backend's get_duckdb_path method
+    // This ensures proper S3 Express directory bucket naming
+    let query_path = workspace.storage().get_duckdb_path(&format!("sources/{}/*/*/data.parquet", source));
     
     // Register Hive-partitioned view with union by name for schema evolution
     connection.execute(&format!(
