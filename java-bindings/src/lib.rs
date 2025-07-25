@@ -1,25 +1,19 @@
 //! Java bindings for snapbase-core
-//! 
+//!
 //! This module provides Java Native Interface (JNI) bindings for the snapbase core library.
 //! It enables Java applications to use snapbase functionality through native method calls.
 
+use arrow::array::Array;
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jboolean, jlong, jobject, jstring, JNI_TRUE, JNI_FALSE};
+use jni::sys::{jboolean, jlong, jobject, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use std::path::{Path, PathBuf};
-use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use arrow::array::Array;
 
 use snapbase_core::{
-    SnapbaseWorkspace, 
-    Result as SnapbaseResult,
-    change_detection::StreamingChangeDetector,
-    resolver::SnapshotResolver,
-    snapshot::SnapshotMetadata,
-    query::SnapshotQueryEngine,
-    naming::SnapshotNamer,
-    config::get_snapshot_config,
-    UnifiedExporter, ExportOptions, ExportFormat,
+    change_detection::StreamingChangeDetector, config::get_snapshot_config, naming::SnapshotNamer,
+    query::SnapshotQueryEngine, resolver::SnapshotResolver, snapshot::SnapshotMetadata,
+    ExportFormat, ExportOptions, Result as SnapbaseResult, SnapbaseWorkspace, UnifiedExporter,
 };
 
 /// Wrapper for SnapbaseWorkspace that can be safely passed through JNI
@@ -30,8 +24,11 @@ struct WorkspaceHandle {
 
 impl WorkspaceHandle {
     fn new(workspace: SnapbaseWorkspace) -> SnapbaseResult<Self> {
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| snapbase_core::error::SnapbaseError::workspace(format!("Failed to create async runtime: {e}")))?;
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+            snapbase_core::error::SnapbaseError::workspace(format!(
+                "Failed to create async runtime: {e}"
+            ))
+        })?;
         Ok(WorkspaceHandle { workspace, runtime })
     }
 }
@@ -42,7 +39,10 @@ fn jstring_to_string(env: &mut JNIEnv, jstr: &JString) -> Result<String, jni::er
 }
 
 /// Convert a Rust string to a Java string
-fn string_to_jstring<'local>(env: &mut JNIEnv<'local>, s: &str) -> Result<JString<'local>, jni::errors::Error> {
+fn string_to_jstring<'local>(
+    env: &mut JNIEnv<'local>,
+    s: &str,
+) -> Result<JString<'local>, jni::errors::Error> {
     env.new_string(s)
 }
 
@@ -61,15 +61,19 @@ fn change_detection_result_to_jobject<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     // Create SchemaChanges object
     let schema_changes = schema_changes_to_jobject(env, &result.schema_changes)?;
-    
+
     // Create RowChanges object
     let row_changes = row_changes_to_jobject(env, &result.row_changes)?;
-    
+
     // Create ChangeDetectionResult object
     let class = env.find_class("com/snapbase/ChangeDetectionResult")?;
     let constructor_sig = "(Lcom/snapbase/SchemaChanges;Lcom/snapbase/RowChanges;)V";
-    let obj = env.new_object(&class, constructor_sig, &[(&schema_changes).into(), (&row_changes).into()])?;
-    
+    let obj = env.new_object(
+        &class,
+        constructor_sig,
+        &[(&schema_changes).into(), (&row_changes).into()],
+    )?;
+
     Ok(obj)
 }
 
@@ -93,23 +97,23 @@ fn schema_changes_to_jobject<'local>(
         }
         None => None,
     };
-    
+
     // Create lists for additions, removals, renames, and type changes
     let columns_added = column_additions_to_arraylist(env, &schema_changes.columns_added)?;
     let columns_removed = column_removals_to_arraylist(env, &schema_changes.columns_removed)?;
     let columns_renamed = column_renames_to_arraylist(env, &schema_changes.columns_renamed)?;
     let type_changes = type_changes_to_arraylist(env, &schema_changes.type_changes)?;
-    
+
     // Create SchemaChanges object
     let class = env.find_class("com/snapbase/SchemaChanges")?;
     let constructor_sig = "(Lcom/snapbase/ColumnOrderChange;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;)V";
-    
+
     let null_obj = JObject::null();
     let column_order_arg = match column_order {
         Some(ref obj) => obj.into(),
         None => (&null_obj).into(),
     };
-    
+
     let obj = env.new_object(
         &class,
         constructor_sig,
@@ -121,7 +125,7 @@ fn schema_changes_to_jobject<'local>(
             (&type_changes).into(),
         ],
     )?;
-    
+
     Ok(obj)
 }
 
@@ -133,7 +137,7 @@ fn row_changes_to_jobject<'local>(
     let modified = row_modifications_to_arraylist(env, &row_changes.modified)?;
     let added = row_additions_to_arraylist(env, &row_changes.added)?;
     let removed = row_removals_to_arraylist(env, &row_changes.removed)?;
-    
+
     let class = env.find_class("com/snapbase/RowChanges")?;
     let constructor_sig = "(Ljava/util/List;Ljava/util/List;Ljava/util/List;)V";
     let obj = env.new_object(
@@ -141,7 +145,7 @@ fn row_changes_to_jobject<'local>(
         constructor_sig,
         &[(&modified).into(), (&added).into(), (&removed).into()],
     )?;
-    
+
     Ok(obj)
 }
 
@@ -152,12 +156,17 @@ fn string_vec_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for item in vec {
         let jstr = string_to_jstring(env, item)?;
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&jstr).into()])?;
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&jstr).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -168,7 +177,7 @@ fn column_additions_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for addition in additions {
         let class = env.find_class("com/snapbase/ColumnAddition")?;
         let name = string_to_jstring(env, &addition.name)?;
@@ -184,7 +193,7 @@ fn column_additions_to_arraylist<'local>(
             Some(ref jstr) => jstr.into(),
             None => (&null_obj).into(),
         };
-        
+
         let obj = env.new_object(
             &class,
             "(Ljava/lang/String;Ljava/lang/String;IZLjava/lang/String;)V",
@@ -196,10 +205,15 @@ fn column_additions_to_arraylist<'local>(
                 default_value,
             ],
         )?;
-        
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&obj).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -210,14 +224,14 @@ fn column_removals_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for removal in removals {
         let class = env.find_class("com/snapbase/ColumnRemoval")?;
         let name = string_to_jstring(env, &removal.name)?;
         let data_type = string_to_jstring(env, &removal.data_type)?;
         let position = removal.position as i32;
         let nullable = removal.nullable;
-        
+
         let obj = env.new_object(
             &class,
             "(Ljava/lang/String;Ljava/lang/String;IZ)V",
@@ -228,10 +242,15 @@ fn column_removals_to_arraylist<'local>(
                 nullable.into(),
             ],
         )?;
-        
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&obj).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -242,21 +261,26 @@ fn column_renames_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for rename in renames {
         let class = env.find_class("com/snapbase/ColumnRename")?;
         let from = string_to_jstring(env, &rename.from)?;
         let to = string_to_jstring(env, &rename.to)?;
-        
+
         let obj = env.new_object(
             &class,
             "(Ljava/lang/String;Ljava/lang/String;)V",
             &[(&from).into(), (&to).into()],
         )?;
-        
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&obj).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -267,22 +291,27 @@ fn type_changes_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for type_change in type_changes {
         let class = env.find_class("com/snapbase/TypeChange")?;
         let column = string_to_jstring(env, &type_change.column)?;
         let from = string_to_jstring(env, &type_change.from)?;
         let to = string_to_jstring(env, &type_change.to)?;
-        
+
         let obj = env.new_object(
             &class,
             "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
             &[(&column).into(), (&from).into(), (&to).into()],
         )?;
-        
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&obj).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -293,21 +322,26 @@ fn row_modifications_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for modification in modifications {
         let class = env.find_class("com/snapbase/RowModification")?;
         let row_index = modification.row_index as i64;
         let changes_map = cell_changes_to_hashmap(env, &modification.changes)?;
-        
+
         let obj = env.new_object(
             &class,
             "(JLjava/util/Map;)V",
             &[row_index.into(), (&changes_map).into()],
         )?;
-        
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&obj).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -318,21 +352,26 @@ fn row_additions_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for addition in additions {
         let class = env.find_class("com/snapbase/RowAddition")?;
         let row_index = addition.row_index as i64;
         let data_map = string_map_to_hashmap(env, &addition.data)?;
-        
+
         let obj = env.new_object(
             &class,
             "(JLjava/util/Map;)V",
             &[row_index.into(), (&data_map).into()],
         )?;
-        
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&obj).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -343,21 +382,26 @@ fn row_removals_to_arraylist<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let array_list_class = env.find_class("java/util/ArrayList")?;
     let array_list = env.new_object(&array_list_class, "()V", &[])?;
-    
+
     for removal in removals {
         let class = env.find_class("com/snapbase/RowRemoval")?;
         let row_index = removal.row_index as i64;
         let data_map = string_map_to_hashmap(env, &removal.data)?;
-        
+
         let obj = env.new_object(
             &class,
             "(JLjava/util/Map;)V",
             &[row_index.into(), (&data_map).into()],
         )?;
-        
-        env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&obj).into()])?;
+
+        env.call_method(
+            &array_list,
+            "add",
+            "(Ljava/lang/Object;)Z",
+            &[(&obj).into()],
+        )?;
     }
-    
+
     Ok(array_list)
 }
 
@@ -368,10 +412,10 @@ fn cell_changes_to_hashmap<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let hashmap_class = env.find_class("java/util/HashMap")?;
     let hashmap = env.new_object(&hashmap_class, "()V", &[])?;
-    
+
     for (key, value) in changes {
         let key_str = string_to_jstring(env, key)?;
-        
+
         // Create CellChange object
         let cell_change_class = env.find_class("com/snapbase/CellChange")?;
         let before = string_to_jstring(env, &value.before)?;
@@ -381,7 +425,7 @@ fn cell_changes_to_hashmap<'local>(
             "(Ljava/lang/String;Ljava/lang/String;)V",
             &[(&before).into(), (&after).into()],
         )?;
-        
+
         env.call_method(
             &hashmap,
             "put",
@@ -389,7 +433,7 @@ fn cell_changes_to_hashmap<'local>(
             &[(&key_str).into(), (&cell_change).into()],
         )?;
     }
-    
+
     Ok(hashmap)
 }
 
@@ -400,11 +444,11 @@ fn string_map_to_hashmap<'local>(
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let hashmap_class = env.find_class("java/util/HashMap")?;
     let hashmap = env.new_object(&hashmap_class, "()V", &[])?;
-    
+
     for (key, value) in map {
         let key_str = string_to_jstring(env, key)?;
         let value_str = string_to_jstring(env, value)?;
-        
+
         env.call_method(
             &hashmap,
             "put",
@@ -412,7 +456,7 @@ fn string_map_to_hashmap<'local>(
             &[(&key_str).into(), (&value_str).into()],
         )?;
     }
-    
+
     Ok(hashmap)
 }
 
@@ -426,28 +470,37 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateWorkspace
     let workspace_path_str = match jstring_to_string(&mut env, &workspace_path) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert workspace path");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert workspace path",
+            );
             return 0;
         }
     };
-    
+
     let path = PathBuf::from(workspace_path_str);
     let workspace = match SnapbaseWorkspace::find_or_create(Some(&path)) {
         Ok(w) => w,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create workspace: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to create workspace: {e}"),
+            );
             return 0;
         }
     };
-    
+
     let handle = match WorkspaceHandle::new(workspace) {
         Ok(h) => h,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create workspace handle: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to create workspace handle: {e}"),
+            );
             return 0;
         }
     };
-    
+
     Box::into_raw(Box::new(handle)) as jlong
 }
 
@@ -459,9 +512,9 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeInit<'local>(
     handle: jlong,
 ) {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
+
     let result = workspace_handle.workspace.create_config_with_force(false);
-    
+
     if handle_result(&mut env, result).is_err() {
         // Error already thrown
     }
@@ -477,97 +530,132 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
     name: JObject<'local>,
 ) -> jstring {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
+
     let file_path_str = match jstring_to_string(&mut env, &file_path) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert file path");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert file path",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let name_str = if name.is_null() {
         None
     } else {
         match jstring_to_string(&mut env, &JString::from(name)) {
             Ok(s) => Some(s),
             Err(_) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert snapshot name");
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    "Failed to convert snapshot name",
+                );
                 return std::ptr::null_mut();
             }
         }
     };
-    
+
     // Convert file path to absolute path
     let input_path = if Path::new(&file_path_str).is_absolute() {
         PathBuf::from(&file_path_str)
     } else {
         workspace_handle.workspace.root.join(&file_path_str)
     };
-    
+
     // Generate snapshot name if not provided
     let snapshot_name = if let Some(name) = name_str {
         name
     } else {
-        let canonical_path = input_path.canonicalize()
+        let canonical_path = input_path
+            .canonicalize()
             .unwrap_or_else(|_| input_path.clone())
             .to_string_lossy()
             .to_string();
-            
+
         let existing_snapshots = match workspace_handle.runtime.block_on(async {
-            let all_snapshots = workspace_handle.workspace.storage().list_snapshots_for_all_sources().await?;
+            let all_snapshots = workspace_handle
+                .workspace
+                .storage()
+                .list_snapshots_for_all_sources()
+                .await?;
             Ok::<Vec<String>, snapbase_core::error::SnapbaseError>(
-                all_snapshots.get(&canonical_path).cloned().unwrap_or_default()
+                all_snapshots
+                    .get(&canonical_path)
+                    .cloned()
+                    .unwrap_or_default(),
             )
         }) {
             Ok(snapshots) => snapshots,
             Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to list existing snapshots: {e}"));
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    format!("Failed to list existing snapshots: {e}"),
+                );
                 return std::ptr::null_mut();
             }
         };
-        
+
         let snapshot_config = match get_snapshot_config() {
             Ok(config) => config,
             Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to get snapshot config: {e}"));
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    format!("Failed to get snapshot config: {e}"),
+                );
                 return std::ptr::null_mut();
             }
         };
-        
+
         let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
         match namer.generate_name(&file_path_str, &existing_snapshots) {
             Ok(name) => name,
             Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to generate snapshot name: {e}"));
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    format!("Failed to generate snapshot name: {e}"),
+                );
                 return std::ptr::null_mut();
             }
         }
     };
-    
+
     // Extract source name from file path (like CLI does)
-    let source_name = input_path.file_name()
+    let source_name = input_path
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(&file_path_str);
-    
+
     // Create the snapshot
-    let metadata = match create_hive_snapshot(&workspace_handle.workspace, &input_path, source_name, &snapshot_name) {
+    let metadata = match create_hive_snapshot(
+        &workspace_handle.workspace,
+        &input_path,
+        source_name,
+        &snapshot_name,
+    ) {
         Ok(m) => m,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create snapshot: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to create snapshot: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let result_message = format!(
-        "Created snapshot '{}' with {} rows, {} columns", 
+        "Created snapshot '{}' with {} rows, {} columns",
         metadata.name, metadata.row_count, metadata.column_count
     );
-    
+
     match string_to_jstring(&mut env, &result_message) {
         Ok(jstr) => jstr.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result string");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create result string",
+            );
             std::ptr::null_mut()
         }
     }
@@ -583,65 +671,79 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
     baseline: JString<'local>,
 ) -> jobject {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
+
     let file_path_str = match jstring_to_string(&mut env, &file_path) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert file path");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert file path",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let baseline_str = match jstring_to_string(&mut env, &baseline) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert baseline name");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert baseline name",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let resolver = SnapshotResolver::new(workspace_handle.workspace.clone());
-    
+
     // Convert file path to absolute path
     let input_path = if Path::new(&file_path_str).is_absolute() {
         PathBuf::from(&file_path_str)
     } else {
         workspace_handle.workspace.root.join(&file_path_str)
     };
-    
+
     // Extract source name from file path (like CLI does)
-    let source_name = input_path.file_name()
+    let source_name = input_path
+        .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(&file_path_str);
-    
+
     // Resolve baseline snapshot
-    let baseline_snapshot = match resolver.resolve_by_name_for_source(&baseline_str, Some(source_name)) {
-        Ok(snapshot) => snapshot,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to resolve baseline snapshot: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-    
+    let baseline_snapshot =
+        match resolver.resolve_by_name_for_source(&baseline_str, Some(source_name)) {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    format!("Failed to resolve baseline snapshot: {e}"),
+                );
+                return std::ptr::null_mut();
+            }
+        };
+
     // Get baseline data path for streaming comparison
     let data_path = match baseline_snapshot.data_path.as_ref() {
         Some(path) => path,
         None => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Baseline snapshot has no data path");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Baseline snapshot has no data path",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     // Create data sources for streaming comparison
     let baseline_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
         path: data_path.clone(),
         workspace: workspace_handle.workspace.clone(),
     };
     let current_source = snapbase_core::change_detection::DataSource::File(input_path);
-    
+
     // Configure comparison options
     let options = snapbase_core::change_detection::ComparisonOptions::default();
-    
+
     // Perform streaming change detection
     let changes = match workspace_handle.runtime.block_on(async {
         StreamingChangeDetector::compare_data_sources(
@@ -649,20 +751,27 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
             current_source,
             options,
             None, // No progress callback for now
-        ).await
+        )
+        .await
     }) {
         Ok(changes) => changes,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to detect changes: {}", e));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to detect changes: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     // Convert to Java object
     match change_detection_result_to_jobject(&mut env, &changes) {
         Ok(obj) => obj.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result object");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create result object",
+            );
             std::ptr::null_mut()
         }
     }
@@ -680,7 +789,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'loc
     schema_ptr: jlong,
 ) {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
+
     let source_str = match jstring_to_string(&mut env, &source) {
         Ok(s) => s,
         Err(_) => {
@@ -688,7 +797,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'loc
             return;
         }
     };
-    
+
     let sql_str = match jstring_to_string(&mut env, &sql) {
         Ok(s) => s,
         Err(_) => {
@@ -696,37 +805,43 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'loc
             return;
         }
     };
-    
+
     // Create query engine and execute query to get Arrow RecordBatch
     let mut query_engine = match SnapshotQueryEngine::new(workspace_handle.workspace.clone()) {
         Ok(engine) => engine,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create query engine: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to create query engine: {e}"),
+            );
             return;
         }
     };
-    
+
     let record_batch = match query_engine.query_arrow(&source_str, &sql_str) {
         Ok(batch) => batch,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Query failed: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Query failed: {e}"),
+            );
             return;
         }
     };
-    
+
     // Export to C Data Interface for zero-copy transfer to Java
     let array_ptr = array_ptr as *mut FFI_ArrowArray;
     let schema_ptr = schema_ptr as *mut FFI_ArrowSchema;
-    
+
     // Convert RecordBatch to FFI structures using proper Arrow FFI API
     use arrow::array::StructArray;
-    
+
     // Convert RecordBatch to StructArray
     let struct_array: StructArray = record_batch.into();
-    
+
     // Get the underlying ArrayData
     let array_data = struct_array.into_data();
-    
+
     // Convert to FFI using arrow::ffi::to_ffi
     match arrow::ffi::to_ffi(&array_data) {
         Ok((ffi_array, ffi_schema)) => {
@@ -737,7 +852,10 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'loc
             }
         }
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to export to FFI: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to export to FFI: {e}"),
+            );
         }
     }
 }
@@ -750,13 +868,20 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetPath<'local>
     handle: jlong,
 ) -> jstring {
     let workspace_handle = unsafe { &*(handle as *const WorkspaceHandle) };
-    
-    let path_str = workspace_handle.workspace.root.to_string_lossy().to_string();
-    
+
+    let path_str = workspace_handle
+        .workspace
+        .root
+        .to_string_lossy()
+        .to_string();
+
     match string_to_jstring(&mut env, &path_str) {
         Ok(jstr) => jstr.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create path string");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create path string",
+            );
             std::ptr::null_mut()
         }
     }
@@ -770,47 +895,70 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeListSnapshots<'
     handle: jlong,
 ) -> jobject {
     let workspace_handle = unsafe { &*(handle as *const WorkspaceHandle) };
-    
+
     let snapshots = match workspace_handle.workspace.list_snapshots() {
         Ok(snapshots) => snapshots,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to list snapshots: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to list snapshots: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     // Create Java ArrayList
     let array_list_class = match env.find_class("java/util/ArrayList") {
         Ok(class) => class,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to find ArrayList class");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to find ArrayList class",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let array_list = match env.new_object(&array_list_class, "()V", &[]) {
         Ok(list) => list,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create ArrayList");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create ArrayList",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     for snapshot in snapshots {
         let jstr = match string_to_jstring(&mut env, &snapshot) {
             Ok(s) => s,
             Err(_) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create snapshot string");
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    "Failed to create snapshot string",
+                );
                 return std::ptr::null_mut();
             }
         };
-        
-        if env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&jstr).into()]).is_err() {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to add snapshot to list");
+
+        if env
+            .call_method(
+                &array_list,
+                "add",
+                "(Ljava/lang/Object;)Z",
+                &[(&jstr).into()],
+            )
+            .is_err()
+        {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to add snapshot to list",
+            );
             return std::ptr::null_mut();
         }
     }
-    
+
     array_list.into_raw()
 }
 
@@ -823,55 +971,84 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeListSnapshotsFo
     source_path: JString<'local>,
 ) -> jobject {
     let workspace_handle = unsafe { &*(handle as *const WorkspaceHandle) };
-    
+
     let source_path_str = match jstring_to_string(&mut env, &source_path) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert source path");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert source path",
+            );
             return std::ptr::null_mut();
         }
     };
-    
-    let snapshots = match workspace_handle.workspace.list_snapshots_for_source(&source_path_str) {
+
+    let snapshots = match workspace_handle
+        .workspace
+        .list_snapshots_for_source(&source_path_str)
+    {
         Ok(snapshots) => snapshots,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to list snapshots for source: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to list snapshots for source: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     // Create Java ArrayList (same as above)
     let array_list_class = match env.find_class("java/util/ArrayList") {
         Ok(class) => class,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to find ArrayList class");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to find ArrayList class",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let array_list = match env.new_object(&array_list_class, "()V", &[]) {
         Ok(list) => list,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create ArrayList");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create ArrayList",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     for snapshot in snapshots {
         let jstr = match string_to_jstring(&mut env, &snapshot) {
             Ok(s) => s,
             Err(_) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create snapshot string");
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    "Failed to create snapshot string",
+                );
                 return std::ptr::null_mut();
             }
         };
-        
-        if env.call_method(&array_list, "add", "(Ljava/lang/Object;)Z", &[(&jstr).into()]).is_err() {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to add snapshot to list");
+
+        if env
+            .call_method(
+                &array_list,
+                "add",
+                "(Ljava/lang/Object;)Z",
+                &[(&jstr).into()],
+            )
+            .is_err()
+        {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to add snapshot to list",
+            );
             return std::ptr::null_mut();
         }
     }
-    
+
     array_list.into_raw()
 }
 
@@ -884,29 +1061,45 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeSnapshotExists<
     name: JString<'local>,
 ) -> jboolean {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
+
     let name_str = match jstring_to_string(&mut env, &name) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert snapshot name");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert snapshot name",
+            );
             return JNI_FALSE;
         }
     };
-    
+
     let exists = match workspace_handle.runtime.block_on(async {
-        let all_snapshots = workspace_handle.workspace.storage().list_all_snapshots().await?;
+        let all_snapshots = workspace_handle
+            .workspace
+            .storage()
+            .list_all_snapshots()
+            .await?;
         Ok::<bool, snapbase_core::error::SnapbaseError>(
-            all_snapshots.iter().any(|snapshot| snapshot.name == name_str)
+            all_snapshots
+                .iter()
+                .any(|snapshot| snapshot.name == name_str),
         )
     }) {
         Ok(exists) => exists,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to check snapshot existence: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to check snapshot existence: {e}"),
+            );
             return JNI_FALSE;
         }
     };
-    
-    if exists { JNI_TRUE } else { JNI_FALSE }
+
+    if exists {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
+    }
 }
 
 /// Get workspace statistics
@@ -917,15 +1110,18 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStats<'local>(
     handle: jlong,
 ) -> jstring {
     let workspace_handle = unsafe { &*(handle as *const WorkspaceHandle) };
-    
+
     let stats = match workspace_handle.workspace.stats() {
         Ok(stats) => stats,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to get workspace stats: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to get workspace stats: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let stats_json = serde_json::json!({
         "snapshot_count": stats.snapshot_count,
         "diff_count": stats.diff_count,
@@ -933,19 +1129,25 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStats<'local>(
         "total_json_size": stats.total_json_size,
         "total_diff_size": stats.total_diff_size
     });
-    
+
     let stats_str = match serde_json::to_string_pretty(&stats_json) {
         Ok(s) => s,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to serialize stats: {e}"));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to serialize stats: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     match string_to_jstring(&mut env, &stats_str) {
         Ok(jstr) => jstr.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create stats string");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create stats string",
+            );
             std::ptr::null_mut()
         }
     }
@@ -962,7 +1164,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
     to_snapshot: JString<'local>,
 ) -> jobject {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
+
     let source_str = match jstring_to_string(&mut env, &source) {
         Ok(s) => s,
         Err(_) => {
@@ -970,67 +1172,88 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
             return std::ptr::null_mut();
         }
     };
-    
+
     let from_str = match jstring_to_string(&mut env, &from_snapshot) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert from snapshot");
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let to_str = match jstring_to_string(&mut env, &to_snapshot) {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert to snapshot");
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let resolver = SnapshotResolver::new(workspace_handle.workspace.clone());
-    
-    // Resolve both snapshots
-    let from_resolved = match resolver.resolve_by_name_for_source(&from_str, Some(&source_str)) {
-        Ok(snapshot) => snapshot,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to resolve from snapshot '{}': {}", from_str, e));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let to_resolved = match resolver.resolve_by_name_for_source(&to_str, Some(&source_str)) {
-        Ok(snapshot) => snapshot,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to resolve to snapshot '{}': {}", to_str, e));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert from snapshot",
+            );
             return std::ptr::null_mut();
         }
     };
 
-    // Create async runtime for data loading operations  
+    let to_str = match jstring_to_string(&mut env, &to_snapshot) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert to snapshot",
+            );
+            return std::ptr::null_mut();
+        }
+    };
+
+    let resolver = SnapshotResolver::new(workspace_handle.workspace.clone());
+
+    // Resolve both snapshots
+    let from_resolved = match resolver.resolve_by_name_for_source(&from_str, Some(&source_str)) {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to resolve from snapshot '{from_str}': {e}"),
+            );
+            return std::ptr::null_mut();
+        }
+    };
+
+    let to_resolved = match resolver.resolve_by_name_for_source(&to_str, Some(&source_str)) {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to resolve to snapshot '{to_str}': {e}"),
+            );
+            return std::ptr::null_mut();
+        }
+    };
+
+    // Create async runtime for data loading operations
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create runtime: {}", e));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to create runtime: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let from_data_path = match from_resolved.data_path.as_ref() {
         Some(path) => path,
         None => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "From snapshot has no data path");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "From snapshot has no data path",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let to_data_path = match to_resolved.data_path.as_ref() {
         Some(path) => path,
         None => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "To snapshot has no data path");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "To snapshot has no data path",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     // Create data sources for streaming comparison
     let baseline_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
         path: from_data_path.clone(),
@@ -1040,10 +1263,10 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
         path: to_data_path.clone(),
         workspace: workspace_handle.workspace.clone(),
     };
-    
+
     // Configure comparison options
     let options = snapbase_core::change_detection::ComparisonOptions::default();
-    
+
     // Perform streaming change detection
     let changes = match rt.block_on(async {
         StreamingChangeDetector::compare_data_sources(
@@ -1051,20 +1274,27 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
             current_source,
             options,
             None, // No progress callback for now
-        ).await
+        )
+        .await
     }) {
         Ok(changes) => changes,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to detect changes: {}", e));
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to detect changes: {e}"),
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     // Convert to Java object
     match change_detection_result_to_jobject(&mut env, &changes) {
         Ok(obj) => obj.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result object");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create result object",
+            );
             std::ptr::null_mut()
         }
     }
@@ -1082,7 +1312,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeExport<'local>(
     force: jboolean,
 ) -> jstring {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
+
     let source_str = match jstring_to_string(&mut env, &source) {
         Ok(s) => s,
         Err(_) => {
@@ -1090,25 +1320,31 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeExport<'local>(
             return std::ptr::null_mut();
         }
     };
-    
+
     let output_str = match jstring_to_string(&mut env, &output_file) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert output file");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert output file",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let to_str = match jstring_to_string(&mut env, &to_snapshot) {
         Ok(s) => s,
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert to snapshot");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to convert to snapshot",
+            );
             return std::ptr::null_mut();
         }
     };
-    
+
     let force_bool = force == JNI_TRUE;
-    
+
     // Build export options
     let options = ExportOptions {
         include_header: true,
@@ -1119,12 +1355,12 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeExport<'local>(
     };
 
     let output_path = Path::new(&output_str);
-    
+
     // Determine output format for reporting
     let export_format = match ExportFormat::from_extension(output_path) {
         Ok(format) => format,
         Err(e) => {
-            let error_msg = format!("Invalid output format: {}", e);
+            let error_msg = format!("Invalid output format: {e}");
             let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
             return std::ptr::null_mut();
         }
@@ -1134,27 +1370,29 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeExport<'local>(
     let mut exporter = match UnifiedExporter::new(workspace_handle.workspace.clone()) {
         Ok(exp) => exp,
         Err(e) => {
-            let error_msg = format!("Failed to create exporter: {}", e);
+            let error_msg = format!("Failed to create exporter: {e}");
             let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
             return std::ptr::null_mut();
         }
     };
-    
+
     if let Err(e) = exporter.export(&source_str, output_path, options) {
-        let error_msg = format!("Export failed: {}", e);
+        let error_msg = format!("Export failed: {e}");
         let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
         return std::ptr::null_mut();
     }
-    
+
     let result_message = format!(
-        "Exported snapshot '{}' from '{}' to '{}' ({:?} format)",
-        to_str, source_str, output_str, export_format
+        "Exported snapshot '{to_str}' from '{source_str}' to '{output_str}' ({export_format:?} format)"
     );
-    
+
     match string_to_jstring(&mut env, &result_message) {
         Ok(jstr) => jstr.into_raw(),
         Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to create result string");
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create result string",
+            );
             std::ptr::null_mut()
         }
     }
@@ -1180,40 +1418,41 @@ fn create_hive_snapshot(
     source_name: &str,
     snapshot_name: &str,
 ) -> SnapbaseResult<SnapshotMetadata> {
+    use chrono::Utc;
     use snapbase_core::data::DataProcessor;
     use snapbase_core::path_utils;
-    use chrono::Utc;
 
     // Create timestamp
     let timestamp = Utc::now();
     let timestamp_str = timestamp.format("%Y%m%dT%H%M%S%.6fZ").to_string();
-    
+
     // Create Hive directory structure path
-    let hive_path_str = path_utils::join_for_storage_backend(&[
-        "sources",
-        source_name,
-        &format!("snapshot_name={snapshot_name}"),
-        &format!("snapshot_timestamp={timestamp_str}")
-    ], workspace.storage());
-    
+    let hive_path_str = path_utils::join_for_storage_backend(
+        &[
+            "sources",
+            source_name,
+            &format!("snapshot_name={snapshot_name}"),
+            &format!("snapshot_timestamp={timestamp_str}"),
+        ],
+        workspace.storage(),
+    );
+
     // Use async runtime to handle storage backend operations
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        workspace.storage().ensure_directory(&hive_path_str).await
-    })?;
-    
+    rt.block_on(async { workspace.storage().ensure_directory(&hive_path_str).await })?;
+
     // Process data with workspace-configured processor
     let mut processor = DataProcessor::new_with_workspace(workspace)?;
     let data_info = processor.load_file(input_path)?;
-    
+
     // Create Parquet file using DuckDB COPY
     let parquet_relative_path = format!("{hive_path_str}/data.parquet");
     let parquet_path = workspace.storage().get_duckdb_path(&parquet_relative_path);
-    
+
     // Export to Parquet using the same method as CLI
     let temp_path = std::path::Path::new(&parquet_path);
     processor.export_to_parquet(temp_path)?;
-    
+
     // Create metadata
     let metadata = SnapshotMetadata {
         format_version: "1.0.0".to_string(),
@@ -1230,15 +1469,18 @@ fn create_hive_snapshot(
         can_reconstruct_parent: false,
         source_path: Some(input_path.to_string_lossy().to_string()),
     };
-    
+
     let metadata_json = serde_json::to_string_pretty(&metadata)?;
     let metadata_path = format!("{hive_path_str}/metadata.json");
-    
+
     // Write metadata using storage backend
     let metadata_bytes = metadata_json.as_bytes();
     rt.block_on(async {
-        workspace.storage().write_file(&metadata_path, metadata_bytes).await
+        workspace
+            .storage()
+            .write_file(&metadata_path, metadata_bytes)
+            .await
     })?;
-    
+
     Ok(metadata)
 }

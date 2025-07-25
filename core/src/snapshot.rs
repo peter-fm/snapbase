@@ -1,11 +1,11 @@
 //! Snapshot creation and management
 
+use crate::change_detection::ChangeDetectionResult;
 use crate::data::{DataInfo, DataProcessor};
 use crate::error::{Result, SnapbaseError};
 use crate::hash::{ColumnHash, ColumnInfo, HashComputer, RowHash, SchemaHash};
-use indicatif::ProgressBar;
-use crate::change_detection::ChangeDetectionResult;
 use chrono::{DateTime, Utc};
+use indicatif::ProgressBar;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -59,7 +59,6 @@ pub struct DeltaInfo {
     pub compressed_size: u64,
 }
 
-
 /// Snapshot creator
 pub struct SnapshotCreator {
     hash_computer: HashComputer,
@@ -69,7 +68,11 @@ pub struct SnapshotCreator {
 impl SnapshotCreator {
     pub fn new(show_progress: bool) -> Self {
         let hash_computer = HashComputer::new();
-        let progress = if show_progress { Some(ProgressBar::new(0)) } else { None };
+        let progress = if show_progress {
+            Some(ProgressBar::new(0))
+        } else {
+            None
+        };
 
         Self {
             hash_computer,
@@ -86,7 +89,14 @@ impl SnapshotCreator {
         json_path: &Path,
         full_data: bool,
     ) -> Result<SnapshotMetadata> {
-        self.create_snapshot_with_workspace(input_path, name, _archive_path, json_path, full_data, None)
+        self.create_snapshot_with_workspace(
+            input_path,
+            name,
+            _archive_path,
+            json_path,
+            full_data,
+            None,
+        )
     }
 
     /// Create a snapshot with workspace context for chain management
@@ -105,7 +115,7 @@ impl SnapshotCreator {
         } else {
             DataProcessor::new()?
         };
-        
+
         // Only check format for files, not directories (which can contain supported files)
         if input_path.is_file() && !DataProcessor::is_supported_format(input_path) {
             return Err(SnapbaseError::invalid_input(format!(
@@ -119,7 +129,7 @@ impl SnapshotCreator {
             pb.set_message("📊 Loading and analyzing data...");
         }
         let data_info = data_processor.load_file(input_path)?;
-        
+
         // Update progress with actual row count
         if let Some(pb) = &self.progress {
             pb.set_length(data_info.row_count);
@@ -131,7 +141,7 @@ impl SnapshotCreator {
         // Phase 3: Compute row hashes with progress reporting
         let row_hashes = self.hash_computer.hash_rows_with_processor_and_progress(
             &mut data_processor,
-            None // No callback needed - data.rs handles progress display directly
+            None, // No callback needed - data.rs handles progress display directly
         )?;
         if let Some(pb) = &self.progress {
             let message = format!("✅ Hashed {} rows", row_hashes.len());
@@ -146,7 +156,9 @@ impl SnapshotCreator {
         };
 
         // Phase 4: Compute column hashes
-        let column_hashes = self.hash_computer.hash_columns_with_processor(&mut data_processor)?;
+        let column_hashes = self
+            .hash_computer
+            .hash_columns_with_processor(&mut data_processor)?;
         if let Some(pb) = &self.progress {
             let message = format!("✅ Hashed {} columns", column_hashes.len());
             pb.set_message(message);
@@ -156,7 +168,7 @@ impl SnapshotCreator {
         if let Some(pb) = &self.progress {
             pb.set_message("📦 Creating snapshot...");
         }
-        
+
         // Determine workspace base path
         let workspace_base = if let Some(ws) = workspace {
             ws.snapbase_dir.clone()
@@ -164,7 +176,7 @@ impl SnapshotCreator {
             // Default to current directory's .snapbase if no workspace context
             std::env::current_dir()?.join(".snapbase")
         };
-        
+
         self.create_hive_snapshot(
             &data_info,
             &schema_hash,
@@ -176,16 +188,16 @@ impl SnapshotCreator {
             &mut data_processor,
             &workspace_base,
         )?;
-        
+
         // Archive creation removed - using Hive-style storage only
         let archive_size = 0; // No archive file created
 
         // Create canonical source path and fingerprint for source tracking
-        let canonical_source_path = input_path.canonicalize()
+        let canonical_source_path = input_path
+            .canonicalize()
             .unwrap_or_else(|_| input_path.to_path_buf())
             .to_string_lossy()
             .to_string();
-        
 
         // Create metadata
         let mut metadata = SnapshotMetadata {
@@ -225,8 +237,6 @@ impl SnapshotCreator {
         Ok(metadata)
     }
 
-
-
     // NOTE: Removed create_delta_parquet() - delta files are redundant
     // All operations use full data.parquet files, not deltas
 
@@ -245,12 +255,14 @@ impl SnapshotCreator {
     ) -> Result<()> {
         // Generate timestamp for Hive partitioning
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string();
-        
+
         // Extract source name from path
-        let source_name = data_info.source.file_name()
+        let source_name = data_info
+            .source
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        
+
         // Create Hive directory structure using OS-native paths for local operations
         // Note: This is for local filesystem operations, not storage backend operations
         let hive_dir = workspace_base
@@ -258,11 +270,11 @@ impl SnapshotCreator {
             .join(source_name)
             .join(format!("snapshot_name={name}"))
             .join(format!("snapshot_timestamp={timestamp}"));
-        
+
         std::fs::create_dir_all(&hive_dir)?;
-        
+
         // Create metadata.json
-        
+
         let metadata = serde_json::json!({
             "format_version": "2.0",
             "name": name,
@@ -276,21 +288,21 @@ impl SnapshotCreator {
             "can_reconstruct_parent": false, // No deltas
             "source_path": data_info.source.to_string_lossy(),
         });
-        
+
         let metadata_path = hive_dir.join("metadata.json");
         std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
-        
+
         // Note: schema.json is no longer created - schema information is stored in metadata.json
         // and hashes are computed on-demand from the columns array
-        
+
         // Create data.parquet using DuckDB COPY (only if full_data is true)
         if full_data {
             let parquet_path = hive_dir.join("data.parquet");
-            
+
             // Use DuckDB's COPY command to export directly to Parquet
             data_processor.export_to_parquet(&parquet_path)?;
         }
-        
+
         Ok(())
     }
 
@@ -302,21 +314,23 @@ impl SnapshotCreator {
         _current_row_hashes: &[crate::hash::RowHash],
     ) -> Result<(Option<String>, u64, Option<DeltaInfo>)> {
         // Create canonical source path for current file
-        let current_canonical_path = current_data_info.source.canonicalize()
+        let current_canonical_path = current_data_info
+            .source
+            .canonicalize()
             .unwrap_or_else(|_| current_data_info.source.clone())
             .to_string_lossy()
             .to_string();
 
         // Build source-aware snapshot chain for the current file only
         let chain = SnapshotChain::build_chain_for_source(workspace, &current_canonical_path)?;
-        
+
         if let Some(head_name) = &chain.head {
             // Load parent snapshot metadata
             let (_parent_archive_path, parent_json_path) = workspace.snapshot_paths(head_name);
-            
+
             if parent_json_path.exists() {
                 let parent_metadata = SnapshotLoader::load_metadata(&parent_json_path)?;
-                
+
                 // Double-check that parent is from the same source
                 if let Some(parent_source_path) = &parent_metadata.source_path {
                     if parent_source_path != &current_canonical_path {
@@ -330,24 +344,23 @@ impl SnapshotCreator {
                         .unwrap_or_else(|_| std::path::PathBuf::from(&parent_metadata.source))
                         .to_string_lossy()
                         .to_string();
-                    
+
                     if parent_canonical_path != current_canonical_path {
                         // Parent is from different source, treat as first snapshot
                         return Ok((None, 0, None));
                     }
                 }
-                
+
                 // Archive system removed - no delta computation from old snapshots
                 // Parent exists but we don't compute deltas from archive files anymore
                 let sequence_number = parent_metadata.sequence_number + 1;
                 return Ok((Some(head_name.clone()), sequence_number, None));
             }
         }
-        
+
         // No parent found - this is the first snapshot for this source
         Ok((None, 0, None))
     }
-
 
     /// Update parent's can_reconstruct_parent flag
     fn update_parent_reconstruct_flag(
@@ -362,21 +375,12 @@ impl SnapshotCreator {
     }
 
     /// Update current snapshot to indicate it can reconstruct its parent
-    fn update_current_reconstruct_flag(
-        &self,
-        current_metadata: &mut SnapshotMetadata,
-    ) {
+    fn update_current_reconstruct_flag(&self, current_metadata: &mut SnapshotMetadata) {
         // If this snapshot has a delta from parent, it can reconstruct the parent
         if current_metadata.delta_from_parent.is_some() {
             current_metadata.can_reconstruct_parent = true;
         }
     }
-
-
-
-
-
-
 }
 
 /// Snapshot loader for reading existing snapshots
@@ -389,7 +393,6 @@ impl SnapshotLoader {
         let metadata: SnapshotMetadata = serde_json::from_str(&content)?;
         Ok(metadata)
     }
-
 
     /// Check if snapshot has full archive data
     pub fn has_archive<P: AsRef<Path>>(archive_path: P) -> bool {
@@ -418,7 +421,7 @@ impl SnapshotChain {
     pub fn build_chain(workspace: &crate::workspace::SnapbaseWorkspace) -> Result<Self> {
         let snapshot_names = workspace.list_snapshots()?;
         let mut snapshots = Vec::new();
-        
+
         for name in snapshot_names {
             let (_, json_path) = workspace.snapshot_paths(&name);
             if json_path.exists() {
@@ -426,29 +429,33 @@ impl SnapshotChain {
                 snapshots.push(metadata);
             }
         }
-        
+
         // Sort by sequence number and creation time
         snapshots.sort_by(|a, b| {
-            a.sequence_number.cmp(&b.sequence_number)
+            a.sequence_number
+                .cmp(&b.sequence_number)
                 .then_with(|| a.created.cmp(&b.created))
         });
-        
+
         // Find head (latest snapshot)
         let head = snapshots.last().map(|s| s.name.clone());
-        
+
         Ok(Self { snapshots, head })
     }
 
     /// Build snapshot chain for a specific source file
-    pub fn build_chain_for_source(workspace: &crate::workspace::SnapbaseWorkspace, source_path: &str) -> Result<Self> {
+    pub fn build_chain_for_source(
+        workspace: &crate::workspace::SnapbaseWorkspace,
+        source_path: &str,
+    ) -> Result<Self> {
         let snapshot_names = workspace.list_snapshots()?;
         let mut snapshots = Vec::new();
-        
+
         for name in snapshot_names {
             let (_, json_path) = workspace.snapshot_paths(&name);
             if json_path.exists() {
                 let metadata = SnapshotLoader::load_metadata(&json_path)?;
-                
+
                 // Check if this snapshot is from the same source
                 let is_same_source = if let Some(snapshot_source_path) = &metadata.source_path {
                     // Use the stored canonical source path
@@ -460,46 +467,47 @@ impl SnapshotChain {
                         .unwrap_or_else(|_| std::path::PathBuf::from(&metadata.source))
                         .to_string_lossy()
                         .to_string();
-                    
+
                     snapshot_canonical_path == source_path
                 };
-                
+
                 if is_same_source {
                     snapshots.push(metadata);
                 }
             }
         }
-        
+
         // Sort by sequence number and creation time
         snapshots.sort_by(|a, b| {
-            a.sequence_number.cmp(&b.sequence_number)
+            a.sequence_number
+                .cmp(&b.sequence_number)
                 .then_with(|| a.created.cmp(&b.created))
         });
-        
+
         // Find head (latest snapshot for this source)
         let head = snapshots.last().map(|s| s.name.clone());
-        
+
         Ok(Self { snapshots, head })
     }
-    
+
     /// Find path from one snapshot to another
     pub fn find_path_to_snapshot(&self, target: &str) -> Option<Vec<String>> {
         // Find target snapshot
         let target_snapshot = self.snapshots.iter().find(|s| s.name == target)?;
-        
+
         // Build path by following parent chain backwards
         let mut path = vec![target.to_string()];
         let mut current = target_snapshot;
-        
+
         while let Some(parent_name) = &current.parent_snapshot {
             path.push(parent_name.clone());
             current = self.snapshots.iter().find(|s| s.name == *parent_name)?;
         }
-        
+
         path.reverse();
         Some(path)
     }
-    
+
     /// Check if a snapshot can be safely deleted (has child that can reconstruct it)
     pub fn can_safely_delete(&self, snapshot: &str) -> bool {
         // Find children of this snapshot
@@ -512,7 +520,7 @@ impl SnapshotChain {
         }
         false
     }
-    
+
     /// Get children of a snapshot
     pub fn get_children(&self, snapshot: &str) -> Vec<&SnapshotMetadata> {
         self.snapshots
@@ -520,39 +528,43 @@ impl SnapshotChain {
             .filter(|s| s.parent_snapshot.as_ref() == Some(&snapshot.to_string()))
             .collect()
     }
-    
+
     /// Get parent of a snapshot
     pub fn get_parent(&self, snapshot: &str) -> Option<&SnapshotMetadata> {
         let snapshot_meta = self.snapshots.iter().find(|s| s.name == snapshot)?;
         let parent_name = snapshot_meta.parent_snapshot.as_ref()?;
         self.snapshots.iter().find(|s| s.name == *parent_name)
     }
-    
+
     /// Validate chain integrity
     pub fn validate(&self) -> Result<Vec<String>> {
         let mut issues = Vec::new();
-        
+
         for snapshot in &self.snapshots {
             // Check parent exists if specified
             if let Some(parent_name) = &snapshot.parent_snapshot {
                 if !self.snapshots.iter().any(|s| s.name == *parent_name) {
-                    issues.push(format!("Snapshot '{}' references missing parent '{}'", 
-                                      snapshot.name, parent_name));
+                    issues.push(format!(
+                        "Snapshot '{}' references missing parent '{}'",
+                        snapshot.name, parent_name
+                    ));
                 }
             }
-            
+
             // Check sequence number consistency
             if let Some(parent) = self.get_parent(&snapshot.name) {
                 if snapshot.sequence_number <= parent.sequence_number {
-                    issues.push(format!("Snapshot '{}' has invalid sequence number", 
-                                      snapshot.name));
+                    issues.push(format!(
+                        "Snapshot '{}' has invalid sequence number",
+                        snapshot.name
+                    ));
                 }
             }
         }
-        
+
         Ok(issues)
     }
-    
+
     /// Find snapshots that can be safely deleted using smart chain-aware logic
     pub fn find_safe_deletion_candidates(
         &self,
@@ -560,7 +572,7 @@ impl SnapshotChain {
         workspace: &crate::workspace::SnapbaseWorkspace,
     ) -> Result<Vec<&SnapshotMetadata>> {
         let mut candidates = Vec::new();
-        
+
         // Count total archives
         let mut archives_with_files = Vec::new();
         for snapshot in &self.snapshots {
@@ -569,56 +581,56 @@ impl SnapshotChain {
                 archives_with_files.push(snapshot);
             }
         }
-        
+
         // If we don't have more archives than the minimum, nothing to delete
         if archives_with_files.len() <= keep_full {
             return Ok(candidates);
         }
-        
+
         // Smart deletion strategy:
         // 1. Always keep the head (latest snapshot)
         // 2. Keep snapshots that are needed for reconstruction chains
         // 3. Delete from oldest to newest, but only if safe
-        
+
         let head_name = self.head.as_ref();
         let mut essential_snapshots = std::collections::HashSet::new();
-        
+
         // Mark head as essential
         if let Some(head) = head_name {
             essential_snapshots.insert(head.clone());
         }
-        
+
         // Mark snapshots needed for reconstruction chains as essential
         for snapshot in &self.snapshots {
             if self.is_needed_for_reconstruction(&snapshot.name) {
                 essential_snapshots.insert(snapshot.name.clone());
             }
         }
-        
+
         // Find candidates for deletion (oldest first)
         let mut sorted_archives = archives_with_files.clone();
         sorted_archives.sort_by_key(|s| s.sequence_number);
-        
+
         let mut archives_to_keep = archives_with_files.len();
-        
+
         for snapshot in sorted_archives {
             // Don't delete if it's essential
             if essential_snapshots.contains(&snapshot.name) {
                 continue;
             }
-            
+
             // Don't delete if it would leave us with too few archives
             if archives_to_keep <= keep_full {
                 break;
             }
-            
+
             // Check if this snapshot can be safely deleted
             if self.can_safely_delete(&snapshot.name) {
                 candidates.push(snapshot);
                 archives_to_keep -= 1;
             }
         }
-        
+
         Ok(candidates)
     }
 
@@ -629,7 +641,7 @@ impl SnapshotChain {
         workspace: &crate::workspace::SnapbaseWorkspace,
     ) -> Result<Vec<&SnapshotMetadata>> {
         let mut candidates = Vec::new();
-        
+
         // Count total archives
         let mut archives_with_files = Vec::new();
         for snapshot in &self.snapshots {
@@ -638,16 +650,16 @@ impl SnapshotChain {
                 archives_with_files.push(snapshot);
             }
         }
-        
+
         // Data cleanup strategy:
         // 1. Always keep full data for the most recent N snapshots (head + keep_full-1)
         // 2. Remove full data from ALL other snapshots but preserve deltas
         // 3. Can reconstruct any snapshot through delta chains from head
-        
+
         // Sort archives by sequence number (newest first, so head is first)
         let mut sorted_archives = archives_with_files.clone();
         sorted_archives.sort_by_key(|s| std::cmp::Reverse(s.sequence_number));
-        
+
         // Keep full data for the most recent keep_full snapshots
         for (index, snapshot) in sorted_archives.iter().enumerate() {
             // Clean up all snapshots except the most recent keep_full
@@ -658,23 +670,23 @@ impl SnapshotChain {
                 }
             }
         }
-        
+
         Ok(candidates)
     }
-    
+
     /// Check if a snapshot is needed for reconstruction of other snapshots
     fn is_needed_for_reconstruction(&self, snapshot_name: &str) -> bool {
         // A snapshot is needed if:
         // 1. It's the head (latest)
         // 2. It has children that depend on it for reconstruction
         // 3. It's part of a critical reconstruction path
-        
+
         if let Some(head) = &self.head {
             if head == snapshot_name {
                 return true;
             }
         }
-        
+
         // Check if any children need this snapshot for reconstruction
         for child in &self.snapshots {
             if let Some(parent) = &child.parent_snapshot {
@@ -687,7 +699,7 @@ impl SnapshotChain {
                 }
             }
         }
-        
+
         false
     }
 
@@ -696,7 +708,7 @@ impl SnapshotChain {
         // A snapshot can be reconstructed if:
         // 1. There's a path from the head to this snapshot through deltas
         // 2. OR it has a child that can reconstruct it
-        
+
         // Check if any child can reconstruct this snapshot
         for child in &self.snapshots {
             if let Some(parent) = &child.parent_snapshot {
@@ -705,7 +717,7 @@ impl SnapshotChain {
                 }
             }
         }
-        
+
         // Check if we can trace a path from head to this snapshot
         if let Some(head) = &self.head {
             if let Some(path) = self.find_path_to_snapshot(snapshot_name) {
@@ -713,7 +725,7 @@ impl SnapshotChain {
                 return path.len() > 1 || head == snapshot_name;
             }
         }
-        
+
         false
     }
 }
@@ -721,8 +733,8 @@ impl SnapshotChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_snapshot_metadata_serialization() {
@@ -744,7 +756,7 @@ mod tests {
 
         let json = serde_json::to_string(&metadata).unwrap();
         let deserialized: SnapshotMetadata = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(metadata.name, deserialized.name);
         assert_eq!(metadata.row_count, deserialized.row_count);
         assert_eq!(metadata.sequence_number, deserialized.sequence_number);
@@ -754,7 +766,7 @@ mod tests {
     fn test_snapshot_loader() {
         let temp_dir = TempDir::new().unwrap();
         let json_path = temp_dir.path().join("test.json");
-        
+
         let metadata = SnapshotMetadata {
             format_version: "1.0.0".to_string(),
             name: "test".to_string(),

@@ -1,11 +1,11 @@
 //! Unified data export functionality using DuckDB COPY command
-//! 
+//!
 //! This module provides efficient export capabilities for snapshot data to various formats
 //! including CSV, Parquet, JSON, and Excel using DuckDB's native COPY command.
 
 use crate::error::{Result, SnapbaseError};
-use crate::workspace::SnapbaseWorkspace;
 use crate::query_engine;
+use crate::workspace::SnapbaseWorkspace;
 use duckdb::Connection;
 use std::path::Path;
 
@@ -27,7 +27,7 @@ impl ExportFormat {
     pub fn duckdb_format(&self) -> &'static str {
         match self {
             ExportFormat::Csv => "CSV",
-            ExportFormat::Parquet => "PARQUET", 
+            ExportFormat::Parquet => "PARQUET",
             ExportFormat::Json => "JSON",
             ExportFormat::Excel => "XLSX",
         }
@@ -35,16 +35,19 @@ impl ExportFormat {
 
     /// Determine format from file extension
     pub fn from_extension(path: &Path) -> Result<Self> {
-        let extension = path.extension()
+        let extension = path
+            .extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.to_lowercase());
-            
+
         match extension.as_deref() {
             Some("csv") => Ok(ExportFormat::Csv),
             Some("parquet") => Ok(ExportFormat::Parquet),
             Some("json") => Ok(ExportFormat::Json),
             Some("xlsx") => Ok(ExportFormat::Excel),
-            Some(ext) => Err(SnapbaseError::invalid_input(format!("Unsupported file extension: {}", ext))),
+            Some(ext) => Err(SnapbaseError::invalid_input(format!(
+                "Unsupported file extension: {ext}"
+            ))),
             None => Err(SnapbaseError::invalid_input("No file extension provided")),
         }
     }
@@ -87,7 +90,10 @@ impl UnifiedExporter {
     /// Create a new UnifiedExporter
     pub fn new(workspace: SnapbaseWorkspace) -> Result<Self> {
         let connection = query_engine::create_configured_connection(&workspace)?;
-        Ok(Self { connection, workspace })
+        Ok(Self {
+            connection,
+            workspace,
+        })
     }
 
     /// Export snapshot data to file using DuckDB COPY command
@@ -99,7 +105,7 @@ impl UnifiedExporter {
     ) -> Result<()> {
         // Determine output format from file extension
         let format = ExportFormat::from_extension(output_path)?;
-        
+
         // Check if output file exists and handle force option
         if output_path.exists() && !options.force {
             return Err(SnapbaseError::invalid_input(format!(
@@ -115,10 +121,9 @@ impl UnifiedExporter {
         let copy_command = self.build_copy_command(output_path, format, &options)?;
 
         // Execute the COPY command
-        self.connection.execute(&copy_command, [])
-            .map_err(|e| SnapbaseError::invalid_input(format!(
-                "Export failed: {}", e
-            )))?;
+        self.connection
+            .execute(&copy_command, [])
+            .map_err(|e| SnapbaseError::invalid_input(format!("Export failed: {e}")))?;
 
         Ok(())
     }
@@ -127,38 +132,37 @@ impl UnifiedExporter {
     fn register_source_view(&mut self, source_file: &str, options: &ExportOptions) -> Result<()> {
         // Get the storage backend configuration
         let storage_config = self.workspace.config().clone();
-        
+
         // Configure DuckDB for the storage backend (S3 or local)
         query_engine::configure_duckdb_for_storage(&self.connection, &storage_config)?;
 
         // Build the source path using storage backend's get_duckdb_path method
         // This ensures proper S3 Express directory bucket naming
-        let base_path = self.workspace.storage().get_duckdb_path(&format!("sources/{source_file}/**/*.parquet"));
+        let base_path = self
+            .workspace
+            .storage()
+            .get_duckdb_path(&format!("sources/{source_file}/**/*.parquet"));
 
         // Create the view with Hive-style partitioning
         let mut view_sql = format!(
-            "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{}')",
-            base_path
+            "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{base_path}')"
         );
 
         // Add snapshot filtering if specified
         if let Some(snapshot_name) = &options.snapshot_name {
             view_sql = format!(
-                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{}') WHERE snapshot_name = '{}'",
-                base_path, snapshot_name
+                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{base_path}') WHERE snapshot_name = '{snapshot_name}'"
             );
         } else if let Some(snapshot_date) = &options.snapshot_date {
             // For date-based filtering, we'd need to parse the timestamp
             view_sql = format!(
-                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{}') WHERE DATE(snapshot_timestamp) = '{}'",
-                base_path, snapshot_date
+                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{base_path}') WHERE DATE(snapshot_timestamp) = '{snapshot_date}'"
             );
         }
 
-        self.connection.execute(&view_sql, [])
-            .map_err(|e| SnapbaseError::invalid_input(format!(
-                "Failed to register source view: {}", e
-            )))?;
+        self.connection.execute(&view_sql, []).map_err(|e| {
+            SnapbaseError::invalid_input(format!("Failed to register source view: {e}"))
+        })?;
 
         Ok(())
     }
@@ -171,32 +175,29 @@ impl UnifiedExporter {
         options: &ExportOptions,
     ) -> Result<String> {
         let path_str = output_path.to_string_lossy();
-        
+
         match format {
             ExportFormat::Csv => {
-                let header = if options.include_header { "true" } else { "false" };
+                let header = if options.include_header {
+                    "true"
+                } else {
+                    "false"
+                };
                 Ok(format!(
                     "COPY (SELECT * FROM export_data) TO '{}' (FORMAT CSV, HEADER {}, DELIMITER '{}')",
                     path_str, header, options.delimiter
                 ))
             }
-            ExportFormat::Parquet => {
-                Ok(format!(
-                    "COPY (SELECT * FROM export_data) TO '{}' (FORMAT PARQUET)",
-                    path_str
-                ))
-            }
-            ExportFormat::Json => {
-                Ok(format!(
-                    "COPY (SELECT * FROM export_data) TO '{}' (FORMAT JSON)",
-                    path_str
-                ))
-            }
+            ExportFormat::Parquet => Ok(format!(
+                "COPY (SELECT * FROM export_data) TO '{path_str}' (FORMAT PARQUET)"
+            )),
+            ExportFormat::Json => Ok(format!(
+                "COPY (SELECT * FROM export_data) TO '{path_str}' (FORMAT JSON)"
+            )),
             ExportFormat::Excel => {
                 // Note: Excel format might require additional DuckDB extensions
                 Ok(format!(
-                    "COPY (SELECT * FROM export_data) TO '{}' (FORMAT XLSX)",
-                    path_str
+                    "COPY (SELECT * FROM export_data) TO '{path_str}' (FORMAT XLSX)"
                 ))
             }
         }
@@ -211,7 +212,7 @@ impl UnifiedExporter {
         options: ExportOptions,
     ) -> Result<()> {
         let format = ExportFormat::from_extension(output_path)?;
-        
+
         // Check if output file exists and handle force option
         if output_path.exists() && !options.force {
             return Err(SnapbaseError::invalid_input(format!(
@@ -227,28 +228,31 @@ impl UnifiedExporter {
         let path_str = output_path.to_string_lossy();
         let copy_command = match format {
             ExportFormat::Csv => {
-                let header = if options.include_header { "true" } else { "false" };
+                let header = if options.include_header {
+                    "true"
+                } else {
+                    "false"
+                };
                 format!(
                     "COPY ({}) TO '{}' (FORMAT CSV, HEADER {}, DELIMITER '{}')",
                     query, path_str, header, options.delimiter
                 )
             }
             ExportFormat::Parquet => {
-                format!("COPY ({}) TO '{}' (FORMAT PARQUET)", query, path_str)
+                format!("COPY ({query}) TO '{path_str}' (FORMAT PARQUET)")
             }
             ExportFormat::Json => {
-                format!("COPY ({}) TO '{}' (FORMAT JSON)", query, path_str)
+                format!("COPY ({query}) TO '{path_str}' (FORMAT JSON)")
             }
             ExportFormat::Excel => {
-                format!("COPY ({}) TO '{}' (FORMAT XLSX)", query, path_str)
+                format!("COPY ({query}) TO '{path_str}' (FORMAT XLSX)")
             }
         };
 
         // Execute the COPY command
-        self.connection.execute(&copy_command, [])
-            .map_err(|e| SnapbaseError::invalid_input(format!(
-                "Export query failed: {}", e
-            )))?;
+        self.connection
+            .execute(&copy_command, [])
+            .map_err(|e| SnapbaseError::invalid_input(format!("Export query failed: {e}")))?;
 
         Ok(())
     }
@@ -313,9 +317,9 @@ mod tests {
     #[test]
     fn test_export_options_default() {
         let options = ExportOptions::default();
-        assert_eq!(options.include_header, true);
+        assert!(options.include_header);
         assert_eq!(options.delimiter, ',');
-        assert_eq!(options.force, false);
+        assert!(!options.force);
         assert_eq!(options.snapshot_name, None);
         assert_eq!(options.snapshot_date, None);
     }

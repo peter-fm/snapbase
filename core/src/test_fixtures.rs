@@ -1,8 +1,8 @@
 //! Test fixtures and utilities for snapbase tests
 //! This module provides shared test data and configuration files
 
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Test fixture paths and utilities
@@ -21,21 +21,20 @@ impl Default for TestFixtures {
 impl TestFixtures {
     /// Get the test fixtures directory
     pub fn new() -> Self {
-        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures");
-        
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+
         Self {
             data_dir: fixtures_dir.join("data"),
             configs_dir: fixtures_dir.join("configs"),
             fixtures_dir,
         }
     }
-    
+
     /// Get path to a test data file
     pub fn data_file(&self, name: &str) -> PathBuf {
         self.data_dir.join(name)
     }
-    
+
     /// Get path to a test config file
     pub fn config_file(&self, name: &str) -> PathBuf {
         self.configs_dir.join(name)
@@ -55,62 +54,57 @@ impl TestWorkspace {
         let fixtures = TestFixtures::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let path = temp_dir.path().to_path_buf();
-        
+
         // Copy the config file to the temp workspace
         let source_config = fixtures.config_file(config_name);
         let config_path = path.join("snapbase.toml");
-        
+
         // Read the original config
-        let config_content = fs::read_to_string(&source_config)
-            .expect("Failed to read config file");
-        
+        let config_content =
+            fs::read_to_string(&source_config).expect("Failed to read config file");
+
         // Create storage directory within temp workspace
         let storage_dir = path.join("snapbase_storage");
-        fs::create_dir_all(&storage_dir)
-            .expect("Failed to create storage directory");
-        
+        fs::create_dir_all(&storage_dir).expect("Failed to create storage directory");
+
         // Update config to use the temp storage directory
         let updated_config = config_content.replace(
             "path = \"snapbase_storage\"",
-            &format!("path = \"{}\"", storage_dir.to_string_lossy())
+            &format!("path = \"{}\"", storage_dir.to_string_lossy()),
         );
-        
+
         // Write updated config
-        fs::write(&config_path, updated_config)
-            .expect("Failed to write config file");
-        
+        fs::write(&config_path, updated_config).expect("Failed to write config file");
+
         Self {
             temp_dir,
             path,
             config_path,
         }
     }
-    
+
     /// Copy a test data file to the workspace
     pub fn copy_data_file(&self, data_file_name: &str, target_name: &str) -> PathBuf {
         let fixtures = TestFixtures::new();
         let source = fixtures.data_file(data_file_name);
         let target = self.path.join(target_name);
-        
-        fs::copy(&source, &target)
-            .expect("Failed to copy data file");
-        
+
+        fs::copy(&source, &target).expect("Failed to copy data file");
+
         target
     }
-    
+
     /// Get the workspace path
     pub fn path(&self) -> &Path {
         &self.path
     }
-    
+
     /// Change to the workspace directory (for tests that need current dir)
     pub fn change_to_workspace(&self) -> WorkspaceGuard {
-        let original_dir = std::env::current_dir()
-            .expect("Failed to get current directory");
-        
-        std::env::set_current_dir(&self.path)
-            .expect("Failed to change to workspace directory");
-        
+        let original_dir = std::env::current_dir().expect("Failed to get current directory");
+
+        std::env::set_current_dir(&self.path).expect("Failed to change to workspace directory");
+
         WorkspaceGuard { original_dir }
     }
 }

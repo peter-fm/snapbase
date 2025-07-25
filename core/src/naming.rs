@@ -16,56 +16,65 @@ impl SnapshotNamer {
     pub fn generate_name(&self, source_path: &str, existing_names: &[String]) -> Result<String> {
         let variables = self.build_variables(source_path, existing_names)?;
         let mut result = self.pattern.clone();
-        
+
         // Replace variables in the pattern
         for (key, value) in variables {
             result = result.replace(&format!("{{{key}}}"), &value);
         }
-        
+
         Ok(result)
     }
 
-    fn build_variables(&self, source_path: &str, existing_names: &[String]) -> Result<HashMap<String, String>> {
+    fn build_variables(
+        &self,
+        source_path: &str,
+        existing_names: &[String],
+    ) -> Result<HashMap<String, String>> {
         let mut variables = HashMap::new();
-        
+
         // Source file information
         let path = Path::new(source_path);
-        let source_name = path.file_stem()
+        let source_name = path
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown")
             .to_string();
-        let source_ext = path.extension()
+        let source_ext = path
+            .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        
+
         variables.insert("source".to_string(), source_name);
         variables.insert("source_ext".to_string(), source_ext.clone());
-        
+
         // Format detection
         let format = self.detect_format(&source_ext);
         variables.insert("format".to_string(), format);
-        
+
         // Timestamp information
         let now = Local::now();
-        variables.insert("timestamp".to_string(), now.format("%Y%m%d_%H%M%S").to_string());
+        variables.insert(
+            "timestamp".to_string(),
+            now.format("%Y%m%d_%H%M%S").to_string(),
+        );
         variables.insert("date".to_string(), now.format("%Y%m%d").to_string());
         variables.insert("time".to_string(), now.format("%H%M%S").to_string());
         variables.insert("iso_date".to_string(), now.format("%Y-%m-%d").to_string());
         variables.insert("iso_time".to_string(), now.format("%H:%M:%S").to_string());
-        
+
         // Sequential numbering
         let seq = self.calculate_next_sequence(existing_names)?;
         variables.insert("seq".to_string(), seq.to_string());
-        
+
         // Random hash
         let hash = self.generate_hash();
         variables.insert("hash".to_string(), hash);
-        
+
         // User information
         let user = whoami::username();
         variables.insert("user".to_string(), user);
-        
+
         Ok(variables)
     }
 
@@ -80,13 +89,14 @@ impl SnapshotNamer {
             "txt" => "txt",
             "xlsx" | "xls" => "excel",
             _ => "data",
-        }.to_string()
+        }
+        .to_string()
     }
 
     fn calculate_next_sequence(&self, existing_names: &[String]) -> Result<i32> {
         // Extract numeric sequences from existing names that match the pattern
         let mut max_seq = 0;
-        
+
         for name in existing_names {
             // Simple heuristic: find the last number in the name
             let numbers: Vec<i32> = name
@@ -98,12 +108,12 @@ impl SnapshotNamer {
                     num_str.parse::<i32>().ok()
                 })
                 .collect();
-            
+
             if let Some(&last_num) = numbers.last() {
                 max_seq = max_seq.max(last_num);
             }
         }
-        
+
         Ok(max_seq + 1)
     }
 
@@ -139,7 +149,7 @@ mod tests {
     #[test]
     fn test_format_detection() {
         let namer = SnapshotNamer::new("{format}".to_string());
-        
+
         assert_eq!(namer.generate_name("test.csv", &[]).unwrap(), "csv");
         assert_eq!(namer.generate_name("test.json", &[]).unwrap(), "json");
         assert_eq!(namer.generate_name("test.parquet", &[]).unwrap(), "parquet");

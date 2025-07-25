@@ -10,13 +10,6 @@
 # OS files
 .DS_Store
 
-# Legacy directories from refactoring
-/demo
-/test_data
-/src.backup
-/test_data.backup
-/tests.backup
-
 # Ignore compressed snapshot archives
 .snapbase/*
 
@@ -35,3 +28,4 @@ snapbase.toml
 testspace/*
 
 dist/*
+ubertest.sh

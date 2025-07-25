@@ -6,24 +6,27 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    
+
     // Skip DuckDB library detection if bundled feature is enabled
     if cfg!(feature = "bundled") {
         // println!("cargo:warning=Using bundled DuckDB - skipping system library detection");
         return;
     }
-    
+
     // Try to find DuckDB library for linking
     if let Some(lib_path) = find_duckdb_library() {
         println!("cargo:rustc-link-search=native={}", lib_path.display());
         println!("cargo:rustc-link-lib=duckdb");
-        println!("cargo:warning=Found DuckDB library at: {}", lib_path.display());
+        println!(
+            "cargo:warning=Found DuckDB library at: {}",
+            lib_path.display()
+        );
     } else {
         // Print helpful error message
         eprintln!("❌ DuckDB library not found!");
         eprintln!();
         eprintln!("Please install DuckDB:");
-        
+
         if cfg!(target_os = "macos") {
             eprintln!("  brew install duckdb");
         } else if cfg!(target_os = "linux") {
@@ -32,14 +35,14 @@ fn main() {
         } else if cfg!(target_os = "windows") {
             eprintln!("  Download from: https://duckdb.org/docs/installation/");
         }
-        
+
         eprintln!();
         eprintln!("Or use bundled DuckDB:");
         eprintln!("  cargo build --features bundled");
         eprintln!();
         eprintln!("Or set custom path:");
         eprintln!("  export DUCKDB_LIB_PATH=/path/to/duckdb/lib");
-        
+
         panic!("DuckDB library not found");
     }
 }
@@ -59,7 +62,9 @@ fn find_duckdb_library() -> Option<PathBuf> {
     }
 
     // 3. Check standard system paths
-    get_standard_paths().into_iter().find(|path| check_duckdb_library(path))
+    get_standard_paths()
+        .into_iter()
+        .find(|path| check_duckdb_library(path))
 }
 
 fn try_pkg_config() -> Option<PathBuf> {

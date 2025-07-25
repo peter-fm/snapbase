@@ -1,41 +1,41 @@
 //! # snapbase-core
-//! 
-//! Core library for snapbase - A snapshot-based structured data diff tool for detecting 
+//!
+//! Core library for snapbase - A snapshot-based structured data diff tool for detecting
 //! schema, column-level, and row-level changes between versions of structured datasets.
-//! 
+//!
 //! This crate provides the core functionality that can be used by different interfaces
 //! (CLI, Python bindings, web APIs, etc.).
 
-pub mod error;
-pub mod workspace;
-pub mod resolver;
-pub mod hash;
-pub mod data;
-pub mod duckdb_config;
-pub mod snapshot;
 pub mod change_detection;
-pub mod sql;
-pub mod query;
 pub mod config;
-pub mod storage;
-pub mod query_engine;
+pub mod data;
+pub mod database;
+pub mod duckdb_config;
+pub mod error;
+pub mod export;
+pub mod hash;
 pub mod naming;
 pub mod path_utils;
-pub mod database;
-pub mod export;
+pub mod query;
+pub mod query_engine;
+pub mod resolver;
+pub mod snapshot;
+pub mod sql;
+pub mod storage;
+pub mod workspace;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
 
 // Re-export the most commonly used types for convenience
-pub use error::{Result, SnapbaseError};
-pub use workspace::SnapbaseWorkspace;
-pub use resolver::SnapshotResolver;
-pub use snapshot::{SnapshotMetadata, SnapshotCreator};
-pub use change_detection::{StreamingChangeDetector, ChangeDetectionResult};
-pub use storage::StorageBackend;
+pub use change_detection::{ChangeDetectionResult, StreamingChangeDetector};
 pub use config::Config;
-pub use export::{UnifiedExporter, ExportFormat, ExportOptions};
+pub use error::{Result, SnapbaseError};
+pub use export::{ExportFormat, ExportOptions, UnifiedExporter};
+pub use resolver::SnapshotResolver;
+pub use snapshot::{SnapshotCreator, SnapshotMetadata};
+pub use storage::StorageBackend;
+pub use workspace::SnapbaseWorkspace;
 
 /// Current format version for snapbase files
 pub const FORMAT_VERSION: &str = "1.0.0";

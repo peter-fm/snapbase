@@ -35,9 +35,13 @@ impl ProgressReporter {
         // Disabled: progress bar conflicts with text-based progress reporting
         // Text-based progress in data.rs provides cleaner output
     }
-    
+
     /// Create upload progress bar
-    pub fn create_upload_progress(&mut self, file_size: u64, message: &str) -> Option<&ProgressBar> {
+    pub fn create_upload_progress(
+        &mut self,
+        file_size: u64,
+        message: &str,
+    ) -> Option<&ProgressBar> {
         if self.show_progress {
             self.upload_pb = Some(create_file_progress(file_size, message));
             self.upload_pb.as_ref()
@@ -54,20 +58,19 @@ impl ProgressReporter {
         // Immediately create the rows progress bar for large datasets
         self.ensure_rows_pb();
     }
-    
+
     /// Finish row processing
     pub fn finish_rows(&mut self, message: &str) {
         // Simply print the completion message since we're not using progress bars for rows
         println!("  {message}");
     }
-    
+
     /// Finish upload progress
     pub fn finish_upload(&mut self, message: &str) {
         if let Some(pb) = self.upload_pb.take() {
             pb.finish_with_message(message.to_string());
         }
     }
-
 }
 
 impl Drop for ProgressReporter {
@@ -104,7 +107,6 @@ fn create_spinner(message: &str) -> ProgressBar {
     pb.enable_steady_tick(Duration::from_millis(100));
     pb
 }
-
 
 /// Create a simple progress bar for file operations
 pub fn create_file_progress(total: u64, message: &str) -> ProgressBar {

@@ -15,7 +15,7 @@ impl DuckDbConfig {
     pub fn new() -> Self {
         let library_path = Self::discover_library_path();
         let prefer_bundled = env::var("DUCKDB_DISABLE_BUNDLED").is_err();
-        
+
         Self {
             library_path,
             prefer_bundled,
@@ -150,9 +150,9 @@ impl DuckDbConfig {
     /// Create a helpful error message for missing DuckDB
     fn create_helpful_error_message(&self) -> String {
         let mut message = String::from("❌ DuckDB library not found!\n\n");
-        
+
         message.push_str("Possible solutions:\n");
-        
+
         if cfg!(target_os = "macos") {
             message.push_str("1. Install DuckDB: brew install duckdb\n");
         } else if cfg!(target_os = "linux") {
@@ -162,16 +162,16 @@ impl DuckDbConfig {
             message.push_str("1. Download DuckDB from: https://duckdb.org/docs/installation/\n");
             message.push_str("   Extract to C:\\Program Files\\DuckDB\\\n");
         }
-        
+
         message.push_str("2. Set custom path: export DUCKDB_LIB_PATH=/path/to/duckdb/lib\n");
-        
+
         if cfg!(feature = "bundled") {
             message.push_str("3. Use bundled version: This should work automatically!\n");
             message.push_str("   If you see this error, please report it as a bug.\n");
         } else {
             message.push_str("3. Rebuild with bundled DuckDB: cargo build --features bundled\n");
         }
-        
+
         message.push_str("\nSearched paths:\n");
         for path in Self::get_standard_paths() {
             let status = if Self::check_duckdb_library(&path) {
@@ -183,13 +183,13 @@ impl DuckDbConfig {
             };
             message.push_str(&format!("  {} {}\n", status, path.display()));
         }
-        
+
         if let Some(ref custom_path) = self.library_path {
             message.push_str(&format!("\nCustom path: {}\n", custom_path.display()));
         }
-        
+
         message.push_str("\nFor more help: https://github.com/your-repo/snapbase#installation");
-        
+
         message
     }
 
@@ -214,7 +214,7 @@ impl Default for DuckDbConfig {
 pub fn init_duckdb() -> Result<DuckDbConfig> {
     let config = DuckDbConfig::new();
     config.validate()?;
-    
+
     Ok(config)
 }
 
@@ -232,7 +232,10 @@ mod tests {
     #[test]
     fn test_standard_paths_not_empty() {
         let paths = DuckDbConfig::get_standard_paths();
-        assert!(!paths.is_empty(), "Should have at least one standard path for this platform");
+        assert!(
+            !paths.is_empty(),
+            "Should have at least one standard path for this platform"
+        );
     }
 
     #[test]

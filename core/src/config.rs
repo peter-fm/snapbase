@@ -1,12 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::collections::HashMap;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub storage: StorageConfigToml,
     pub snapshot: SnapshotConfig,
@@ -31,23 +30,23 @@ pub enum DatabaseType {
 pub struct DatabaseConfig {
     #[serde(rename = "type")]
     pub db_type: DatabaseType,
-    
+
     /// Direct connection string (alternative to individual fields)
     pub connection_string: Option<String>,
-    
+
     /// Individual connection fields
     pub host: Option<String>,
     pub port: Option<u16>,
     pub database: Option<String>,
     pub username: Option<String>,
-    
+
     /// Environment variable containing the password
     pub password_env: Option<String>,
-    
+
     /// Tables to include (supports patterns like "users" or "*" for all)
     #[serde(default)]
     pub tables: Vec<String>,
-    
+
     /// Tables to exclude (supports patterns like "temp_*")
     #[serde(default)]
     pub exclude_tables: Vec<String>,
@@ -109,7 +108,6 @@ impl Default for StorageConfig {
     }
 }
 
-
 impl Default for SnapshotConfig {
     fn default() -> Self {
         Self {
@@ -163,7 +161,7 @@ impl StorageConfigToml {
                 StorageConfig::Local {
                     path: local_config.path.clone(),
                 }
-            },
+            }
             StorageBackend::S3 => {
                 let default_s3 = S3StorageConfig::default();
                 let s3_config = self.s3.as_ref().unwrap_or(&default_s3);
@@ -176,7 +174,7 @@ impl StorageConfigToml {
                     use_express: s3_config.use_express,
                     availability_zone: s3_config.availability_zone.clone(),
                 }
-            },
+            }
         }
     }
 
@@ -184,12 +182,17 @@ impl StorageConfigToml {
         match runtime_config {
             StorageConfig::Local { path } => Self {
                 backend: StorageBackend::Local,
-                local: Some(LocalStorageConfig {
-                    path: path.clone(),
-                }),
+                local: Some(LocalStorageConfig { path: path.clone() }),
                 s3: None,
             },
-            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => Self {
+            StorageConfig::S3 {
+                bucket,
+                prefix,
+                region,
+                use_express,
+                availability_zone,
+                ..
+            } => Self {
                 backend: StorageBackend::S3,
                 local: None,
                 s3: Some(S3StorageConfig {
@@ -210,9 +213,9 @@ pub fn get_config() -> Result<Config> {
     // 2. Local config file (snapbase.toml)
     // 3. Saved global config file (~/.snapbase/global.toml)
     // 4. Default configuration
-    
+
     let mut config = Config::default();
-    
+
     // 1. Check config file via environment variable (highest priority)
     if let Ok(config_path) = env::var("SNAPBASE_CONFIG") {
         if let Ok(config_content) = fs::read_to_string(config_path) {
@@ -221,7 +224,7 @@ pub fn get_config() -> Result<Config> {
             }
         }
     }
-    
+
     // 2. Check saved global config file location (fallback)
     if let Some(home_dir) = dirs::home_dir() {
         let config_path = home_dir.join(".snapbase").join("global.toml");
@@ -233,7 +236,7 @@ pub fn get_config() -> Result<Config> {
             }
         }
     }
-    
+
     // 3. Load local config file (snapbase.toml) if it exists - takes precedence over global
     if let Ok(current_dir) = env::current_dir() {
         let local_config_path = current_dir.join("snapbase.toml");
@@ -248,12 +251,12 @@ pub fn get_config() -> Result<Config> {
             }
         }
     }
-    
+
     // Override snapshot config with environment variables for backward compatibility
     if let Ok(pattern) = env::var("SNAPBASE_DEFAULT_NAME_PATTERN") {
         config.snapshot.default_name_pattern = pattern;
     }
-    
+
     Ok(config)
 }
 
@@ -263,7 +266,7 @@ pub fn get_storage_config() -> Result<StorageConfig> {
 
 pub fn get_storage_config_from_env_or_default() -> Result<StorageConfig> {
     // Skip saved config file and only use environment variables or default
-    
+
     // Check environment variables (for backward compatibility)
     if let Ok(bucket) = std::env::var("SNAPBASE_S3_BUCKET") {
         return Ok(StorageConfig::S3 {
@@ -272,11 +275,13 @@ pub fn get_storage_config_from_env_or_default() -> Result<StorageConfig> {
             region: std::env::var("SNAPBASE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
             access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
             secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
-            use_express: std::env::var("SNAPBASE_S3_USE_EXPRESS").map(|v| v.to_lowercase() == "true").unwrap_or(false),
+            use_express: std::env::var("SNAPBASE_S3_USE_EXPRESS")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
             availability_zone: std::env::var("SNAPBASE_S3_AVAILABILITY_ZONE").ok(),
         });
     }
-    
+
     // Default to local storage
     Ok(StorageConfigToml::default().to_runtime())
 }
@@ -284,7 +289,7 @@ pub fn get_storage_config_from_env_or_default() -> Result<StorageConfig> {
 pub fn get_storage_config_project_first() -> Result<StorageConfig> {
     // Project-first priority: snapbase.toml → defaults
     // This is used for regular init to prioritize local project settings
-    
+
     // Load local config file (snapbase.toml) if it exists
     if let Ok(current_dir) = std::env::current_dir() {
         let local_config_path = current_dir.join("snapbase.toml");
@@ -296,7 +301,7 @@ pub fn get_storage_config_project_first() -> Result<StorageConfig> {
             }
         }
     }
-    
+
     // Check environment variables (for backward compatibility)
     if let Ok(bucket) = std::env::var("SNAPBASE_S3_BUCKET") {
         return Ok(StorageConfig::S3 {
@@ -305,11 +310,13 @@ pub fn get_storage_config_project_first() -> Result<StorageConfig> {
             region: std::env::var("SNAPBASE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
             access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok(),
             secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
-            use_express: std::env::var("SNAPBASE_S3_USE_EXPRESS").map(|v| v.to_lowercase() == "true").unwrap_or(false),
+            use_express: std::env::var("SNAPBASE_S3_USE_EXPRESS")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
             availability_zone: std::env::var("SNAPBASE_S3_AVAILABILITY_ZONE").ok(),
         });
     }
-    
+
     // Default to local storage
     Ok(StorageConfigToml::default().to_runtime())
 }
@@ -320,13 +327,13 @@ pub fn save_config(config: &Config) -> Result<()> {
     } else {
         PathBuf::from(".snapbase")
     };
-    
+
     fs::create_dir_all(&config_dir)?;
-    
+
     let config_path = config_dir.join("global.toml");
     let config_toml = toml::to_string_pretty(config)?;
     fs::write(config_path, config_toml)?;
-    
+
     Ok(())
 }
 
@@ -355,7 +362,7 @@ pub fn save_global_config_if_missing(storage_config: &StorageConfig) -> Result<(
         PathBuf::from(".snapbase")
     };
     let config_path = config_dir.join("global.toml");
-    
+
     // Only save if the file doesn't exist
     if !config_path.exists() {
         let config = Config {
@@ -364,17 +371,19 @@ pub fn save_global_config_if_missing(storage_config: &StorageConfig) -> Result<(
         };
         save_config(&config)?;
     }
-    
+
     Ok(())
 }
 
-pub fn get_storage_config_with_workspace(workspace_path: Option<&std::path::Path>) -> Result<StorageConfig> {
+pub fn get_storage_config_with_workspace(
+    workspace_path: Option<&std::path::Path>,
+) -> Result<StorageConfig> {
     // Priority order: workspace config → global config → env vars → defaults
-    
+
     // 1. Check workspace config first (if workspace path provided)
     if let Some(workspace_path) = workspace_path {
         let root = workspace_path.to_path_buf();
-        
+
         // Check for snapbase.toml in workspace directory
         let workspace_toml_path = root.join("snapbase.toml");
         if workspace_toml_path.exists() {
@@ -385,7 +394,7 @@ pub fn get_storage_config_with_workspace(workspace_path: Option<&std::path::Path
             }
         }
     }
-    
+
     // 2. Fall back to global config → env vars → defaults
     get_storage_config()
 }
@@ -403,24 +412,37 @@ impl DatabaseConfig {
             }
             return Ok(result);
         }
-        
+
         // Build connection string from individual fields
-        let host = self.host.as_ref().ok_or_else(|| anyhow::anyhow!("Database host is required"))?;
-        let database = self.database.as_ref().ok_or_else(|| anyhow::anyhow!("Database name is required"))?;
-        let username = self.username.as_ref().ok_or_else(|| anyhow::anyhow!("Database username is required"))?;
-        
+        let host = self
+            .host
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Database host is required"))?;
+        let database = self
+            .database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Database name is required"))?;
+        let username = self
+            .username
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Database username is required"))?;
+
         let password = if let Some(ref password_env) = self.password_env {
-            env::var(password_env).map_err(|_| anyhow::anyhow!("Password environment variable '{}' not found", password_env))?
+            env::var(password_env).map_err(|_| {
+                anyhow::anyhow!("Password environment variable '{}' not found", password_env)
+            })?
         } else {
-            return Err(anyhow::anyhow!("Database password or password_env is required"));
+            return Err(anyhow::anyhow!(
+                "Database password or password_env is required"
+            ));
         };
-        
+
         let port = self.port.unwrap_or(match self.db_type {
             DatabaseType::Mysql => 3306,
             DatabaseType::Postgresql => 5432,
             DatabaseType::Sqlite => 0, // Not used for SQLite
         });
-        
+
         let connection_string = match self.db_type {
             DatabaseType::Mysql => {
                 format!("mysql://{username}:{password}@{host}:{port}/{database}")
@@ -433,10 +455,10 @@ impl DatabaseConfig {
                 format!("sqlite://{database}")
             }
         };
-        
+
         Ok(connection_string)
     }
-    
+
     /// Get the tables to include, handling patterns
     pub fn get_included_tables(&self) -> Vec<String> {
         if self.tables.is_empty() || self.tables.contains(&"*".to_string()) {
@@ -445,7 +467,7 @@ impl DatabaseConfig {
             self.tables.clone()
         }
     }
-    
+
     /// Get the tables to exclude, handling patterns
     pub fn get_excluded_tables(&self) -> Vec<String> {
         self.exclude_tables.clone()
@@ -455,7 +477,9 @@ impl DatabaseConfig {
 /// Get database configuration by name
 pub fn get_database_config(name: &str) -> Result<DatabaseConfig> {
     let config = get_config()?;
-    config.databases.get(name)
+    config
+        .databases
+        .get(name)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("Database '{}' not found in configuration", name))
 }
@@ -463,11 +487,11 @@ pub fn get_database_config(name: &str) -> Result<DatabaseConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_database_config_connection_string() {
         env::set_var("TEST_DB_PASSWORD", "testpass");
-        
+
         // Test with individual fields
         let config = DatabaseConfig {
             db_type: DatabaseType::Mysql,
@@ -480,10 +504,10 @@ mod tests {
             tables: vec![],
             exclude_tables: vec![],
         };
-        
+
         let conn_str = config.build_connection_string().unwrap();
         assert_eq!(conn_str, "mysql://testuser:testpass@localhost:3306/testdb");
-        
+
         // Test with connection string template
         let config = DatabaseConfig {
             db_type: DatabaseType::Postgresql,
@@ -496,13 +520,13 @@ mod tests {
             tables: vec![],
             exclude_tables: vec![],
         };
-        
+
         let conn_str = config.build_connection_string().unwrap();
         assert_eq!(conn_str, "postgresql://user:testpass@host:5432/db");
-        
+
         env::remove_var("TEST_DB_PASSWORD");
     }
-    
+
     #[test]
     fn test_database_config_table_filtering() {
         let config = DatabaseConfig {
@@ -516,13 +540,13 @@ mod tests {
             tables: vec!["users".to_string(), "orders".to_string()],
             exclude_tables: vec!["temp_*".to_string()],
         };
-        
+
         let included = config.get_included_tables();
         assert_eq!(included, vec!["users", "orders"]);
-        
+
         let excluded = config.get_excluded_tables();
         assert_eq!(excluded, vec!["temp_*"]);
-        
+
         // Test wildcard
         let config = DatabaseConfig {
             db_type: DatabaseType::Mysql,
@@ -535,11 +559,11 @@ mod tests {
             tables: vec!["*".to_string()],
             exclude_tables: vec![],
         };
-        
+
         let included = config.get_included_tables();
         assert_eq!(included, vec!["*"]);
     }
-    
+
     #[test]
     fn test_s3_express_config() {
         // Test S3 Express configuration
@@ -557,35 +581,42 @@ availability_zone = "use1-az5"
 [snapshot]
 default_name_pattern = "{source}_{seq}"
 "#;
-        
+
         let config: Config = toml::from_str(toml_content).unwrap();
         assert_eq!(config.storage.backend, StorageBackend::S3);
-        
+
         let s3_config = config.storage.s3.as_ref().unwrap();
         assert_eq!(s3_config.bucket, "my-express-bucket");
         assert_eq!(s3_config.prefix, "data/");
         assert_eq!(s3_config.region, "us-east-1");
-        assert_eq!(s3_config.use_express, true);
+        assert!(s3_config.use_express);
         assert_eq!(s3_config.availability_zone, Some("use1-az5".to_string()));
-        
+
         // Test runtime conversion
         let runtime_config = config.storage.to_runtime();
         match runtime_config {
-            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
+            StorageConfig::S3 {
+                bucket,
+                prefix,
+                region,
+                use_express,
+                availability_zone,
+                ..
+            } => {
                 assert_eq!(bucket, "my-express-bucket");
                 assert_eq!(prefix, "data/");
                 assert_eq!(region, "us-east-1");
-                assert_eq!(use_express, true);
+                assert!(use_express);
                 assert_eq!(availability_zone, Some("use1-az5".to_string()));
             }
             _ => panic!("Expected S3 config"),
         }
     }
-    
+
     #[test]
     fn test_config_with_databases() {
         let mut config = Config::default();
-        
+
         let db_config = DatabaseConfig {
             db_type: DatabaseType::Mysql,
             connection_string: None,
@@ -597,14 +628,17 @@ default_name_pattern = "{source}_{seq}"
             tables: vec!["users".to_string()],
             exclude_tables: vec![],
         };
-        
+
         config.databases.insert("test-db".to_string(), db_config);
-        
+
         assert!(config.databases.contains_key("test-db"));
-        assert_eq!(config.databases["test-db"].host, Some("localhost".to_string()));
+        assert_eq!(
+            config.databases["test-db"].host,
+            Some("localhost".to_string())
+        );
         assert_eq!(config.databases["test-db"].tables, vec!["users"]);
     }
-    
+
     #[test]
     fn test_config_s3_only_no_local_section() {
         // Test that S3 config works without requiring local section
@@ -620,31 +654,38 @@ region = "us-west-2"
 [snapshot]
 default_name_pattern = "{source}_{seq}"
 "#;
-        
+
         let config: Config = toml::from_str(toml_content).unwrap();
         assert_eq!(config.storage.backend, StorageBackend::S3);
         assert!(config.storage.local.is_none());
         assert!(config.storage.s3.is_some());
-        
+
         let s3_config = config.storage.s3.as_ref().unwrap();
         assert_eq!(s3_config.bucket, "my-bucket");
         assert_eq!(s3_config.prefix, "my-prefix");
         assert_eq!(s3_config.region, "us-west-2");
-        
+
         // Test that to_runtime() works correctly
         let runtime_config = config.storage.to_runtime();
         match runtime_config {
-            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
+            StorageConfig::S3 {
+                bucket,
+                prefix,
+                region,
+                use_express,
+                availability_zone,
+                ..
+            } => {
                 assert_eq!(bucket, "my-bucket");
                 assert_eq!(prefix, "my-prefix");
                 assert_eq!(region, "us-west-2");
-                assert_eq!(use_express, false);
+                assert!(!use_express);
                 assert_eq!(availability_zone, None);
             }
             _ => panic!("Expected S3 config"),
         }
     }
-    
+
     #[test]
     fn test_s3_express_environment_variables() {
         // Test S3 Express configuration from environment variables
@@ -653,20 +694,27 @@ default_name_pattern = "{source}_{seq}"
         std::env::set_var("SNAPBASE_S3_REGION", "us-east-1");
         std::env::set_var("SNAPBASE_S3_USE_EXPRESS", "true");
         std::env::set_var("SNAPBASE_S3_AVAILABILITY_ZONE", "use1-az4");
-        
+
         let config = get_storage_config_from_env_or_default().unwrap();
-        
+
         match config {
-            StorageConfig::S3 { bucket, prefix, region, use_express, availability_zone, .. } => {
+            StorageConfig::S3 {
+                bucket,
+                prefix,
+                region,
+                use_express,
+                availability_zone,
+                ..
+            } => {
                 assert_eq!(bucket, "my-express-bucket");
                 assert_eq!(prefix, "test-prefix");
                 assert_eq!(region, "us-east-1");
-                assert_eq!(use_express, true);
+                assert!(use_express);
                 assert_eq!(availability_zone, Some("use1-az4".to_string()));
             }
             _ => panic!("Expected S3 config"),
         }
-        
+
         // Cleanup
         std::env::remove_var("SNAPBASE_S3_BUCKET");
         std::env::remove_var("SNAPBASE_S3_PREFIX");
@@ -674,7 +722,7 @@ default_name_pattern = "{source}_{seq}"
         std::env::remove_var("SNAPBASE_S3_USE_EXPRESS");
         std::env::remove_var("SNAPBASE_S3_AVAILABILITY_ZONE");
     }
-    
+
     #[test]
     fn test_config_local_only_no_s3_section() {
         // Test that local config works without requiring S3 section
@@ -688,15 +736,15 @@ path = "/tmp/snapbase"
 [snapshot]
 default_name_pattern = "{source}_{seq}"
 "#;
-        
+
         let config: Config = toml::from_str(toml_content).unwrap();
         assert_eq!(config.storage.backend, StorageBackend::Local);
         assert!(config.storage.local.is_some());
         assert!(config.storage.s3.is_none());
-        
+
         let local_config = config.storage.local.as_ref().unwrap();
         assert_eq!(local_config.path, PathBuf::from("/tmp/snapbase"));
-        
+
         // Test that to_runtime() works correctly
         let runtime_config = config.storage.to_runtime();
         match runtime_config {
