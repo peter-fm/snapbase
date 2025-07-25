@@ -360,6 +360,17 @@ public class SnapbaseWorkspace implements Closeable {
     }
     
     /**
+     * Get configuration resolution information for debugging.
+     * 
+     * @return JSON string containing configuration resolution details
+     * @throws SnapbaseException if operation fails
+     */
+    public String getConfigInfo() throws SnapbaseException {
+        checkHandle();
+        return nativeGetConfigInfo(nativeHandle);
+    }
+    
+    /**
      * Close the workspace and free native resources.
      */
     @Override
@@ -462,5 +473,6 @@ public class SnapbaseWorkspace implements Closeable {
     private static native String nativeStats(long handle) throws SnapbaseException;
     private static native ChangeDetectionResult nativeDiff(long handle, String source, String fromSnapshot, String toSnapshot) throws SnapbaseException;
     private static native String nativeExport(long handle, String source, String outputFile, String toSnapshot, boolean force) throws SnapbaseException;
+    private static native String nativeGetConfigInfo(long handle) throws SnapbaseException;
     private static native void nativeClose(long handle);
 }

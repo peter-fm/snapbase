@@ -348,6 +348,26 @@ pub fn get_snapshot_config() -> Result<SnapshotConfig> {
     Ok(get_config()?.snapshot)
 }
 
+/// Get snapshot configuration with workspace context
+pub fn get_snapshot_config_with_workspace(workspace_path: Option<&std::path::Path>) -> Result<SnapshotConfig> {
+    // Priority order: workspace config → global config → env vars → defaults
+    
+    // 1. Check workspace config first (if workspace path provided)
+    if let Some(workspace_path) = workspace_path {
+        let workspace_toml_path = workspace_path.join("snapbase.toml");
+        if workspace_toml_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&workspace_toml_path) {
+                if let Ok(config) = toml::from_str::<Config>(&content) {
+                    return Ok(config.snapshot);
+                }
+            }
+        }
+    }
+    
+    // 2. Fall back to global config → env vars → defaults
+    get_snapshot_config()
+}
+
 pub fn save_default_name_pattern(pattern: &str) -> Result<()> {
     let mut config = get_config()?;
     config.snapshot.default_name_pattern = pattern.to_string();
@@ -754,4 +774,80 @@ default_name_pattern = "{source}_{seq}"
             _ => panic!("Expected Local config"),
         }
     }
+}
+
+/// Configuration resolution information for debugging
+#[derive(Debug, Clone)]
+pub struct ConfigResolutionInfo {
+    pub config_source: String,
+    pub config_path: Option<String>,
+    pub workspace_path: Option<String>,
+    pub resolution_order: Vec<String>,
+}
+
+/// Get detailed information about configuration resolution
+pub fn get_config_resolution_info(workspace_path: Option<&std::path::Path>) -> Result<ConfigResolutionInfo> {
+    let mut resolution_order = Vec::new();
+    let mut config_source = "default".to_string();
+    let mut config_path = None;
+
+    // Check resolution order
+    if let Ok(env_config) = std::env::var("SNAPBASE_CONFIG") {
+        resolution_order.push(format!("SNAPBASE_CONFIG environment variable: {}", env_config));
+        if std::path::Path::new(&env_config).exists() {
+            config_source = "environment_variable".to_string();
+            config_path = Some(env_config);
+        }
+    }
+
+    // Check workspace config
+    if let Some(workspace_path) = workspace_path {
+        let workspace_toml_path = workspace_path.join("snapbase.toml");
+        resolution_order.push(format!("Workspace config: {}", workspace_toml_path.display()));
+        if workspace_toml_path.exists() {
+            config_source = "workspace".to_string();
+            config_path = Some(workspace_toml_path.to_string_lossy().to_string());
+        }
+    }
+
+    // Check current directory config (only if no workspace was specified or workspace config not found)
+    let current_dir_toml = std::env::current_dir()?.join("snapbase.toml");
+    if workspace_path.is_none() || config_source == "default" {
+        resolution_order.push(format!("Current directory config: {}", current_dir_toml.display()));
+        if config_source == "default" && current_dir_toml.exists() {
+            config_source = "current_directory".to_string();
+            config_path = Some(current_dir_toml.to_string_lossy().to_string());
+        }
+    }
+
+    // Check global config
+    let config_dir = if let Some(home_dir) = dirs::home_dir() {
+        home_dir.join(".snapbase")
+    } else {
+        PathBuf::from(".snapbase")
+    };
+    let global_toml_path = config_dir.join("global.toml");
+    resolution_order.push(format!("Global config: {}", global_toml_path.display()));
+    if config_source == "default" && global_toml_path.exists() {
+        config_source = "global".to_string();
+        config_path = Some(global_toml_path.to_string_lossy().to_string());
+    }
+
+    resolution_order.push("Built-in defaults".to_string());
+
+    Ok(ConfigResolutionInfo {
+        config_source,
+        config_path,
+        workspace_path: workspace_path.map(|p| p.to_string_lossy().to_string()),
+        resolution_order,
+    })
+}
+
+/// Get storage configuration with resolution info
+pub fn get_storage_config_with_resolution_info(
+    workspace_path: Option<&std::path::Path>,
+) -> Result<(StorageConfig, ConfigResolutionInfo)> {
+    let resolution_info = get_config_resolution_info(workspace_path)?;
+    let storage_config = get_storage_config_with_workspace(workspace_path)?;
+    Ok((storage_config, resolution_info))
 }

@@ -15,7 +15,7 @@ use snapbase_core::{
     snapshot::SnapshotMetadata,
     query::SnapshotQueryEngine,
     naming::SnapshotNamer,
-    config::get_snapshot_config,
+    config::get_snapshot_config_with_workspace,
     UnifiedExporter, ExportOptions, ExportFormat,
 };
 
@@ -82,7 +82,7 @@ impl Workspace {
             }).map_err(|e| PyRuntimeError::new_err(format!("Failed to list existing snapshots: {}", e)))?;
 
             // Use configured pattern to generate name
-            let snapshot_config = get_snapshot_config()
+            let snapshot_config = get_snapshot_config_with_workspace(Some(&self.workspace.root))
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to get snapshot config: {}", e)))?;
             let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
             namer.generate_name(file_path, &existing_snapshots)
@@ -297,6 +297,24 @@ impl Workspace {
 
         Ok(format!("Exported snapshot '{}' from '{}' to '{}' ({:?} format)", 
                   to_snapshot, source, output_file, export_format))
+    }
+
+    /// Get configuration resolution information for debugging
+    fn get_config_info(&self) -> PyResult<String> {
+        use snapbase_core::config::get_config_resolution_info;
+        
+        let resolution_info = get_config_resolution_info(Some(&self.workspace.root))
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to get config info: {}", e)))?;
+        
+        let info_json = serde_json::json!({
+            "config_source": resolution_info.config_source,
+            "config_path": resolution_info.config_path,
+            "workspace_path": resolution_info.workspace_path,
+            "resolution_order": resolution_info.resolution_order
+        });
+        
+        Ok(serde_json::to_string_pretty(&info_json)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to serialize config info: {}", e)))?)
     }
 }
 

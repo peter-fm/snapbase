@@ -5,7 +5,7 @@ use crate::output::{JsonFormatter, PrettyPrinter};
 use crate::progress::ProgressReporter;
 use snapbase_core::change_detection::StreamingChangeDetector;
 use snapbase_core::config;
-use snapbase_core::config::{get_database_config, get_snapshot_config};
+use snapbase_core::config::{get_database_config, get_snapshot_config_with_workspace};
 use snapbase_core::database::{create_table_snapshot_sql, discover_database_tables, TableInfo};
 use snapbase_core::error::{Result, SnapbaseError};
 use snapbase_core::export::{ExportFormat, ExportOptions, UnifiedExporter};
@@ -287,7 +287,7 @@ fn snapshot_command(workspace_path: Option<&Path>, input: &str, name: Option<&st
         })?;
 
         // Use configured pattern to generate name
-        let snapshot_config = get_snapshot_config()?;
+        let snapshot_config = get_snapshot_config_with_workspace(Some(&workspace.root))?;
         let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
         namer.generate_name(input, &existing_snapshots)?
     };
@@ -400,7 +400,7 @@ fn database_snapshot_command(
             format!("{prefix}_{table_name}")
         } else {
             // Generate name using configured pattern
-            let snapshot_config = get_snapshot_config()?;
+            let snapshot_config = get_snapshot_config_with_workspace(Some(&workspace.root))?;
             let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
             let rt = tokio::runtime::Runtime::new()?;
             let existing_snapshots = rt.block_on(async {
@@ -1220,7 +1220,9 @@ fn config_command(
             local_path,
             *global,
         ),
-        crate::cli::ConfigCommand::Show => show_current_config(),
+        crate::cli::ConfigCommand::Show { paths, workspace_context } => {
+            show_current_config(*paths, *workspace_context, workspace_path)
+        },
         crate::cli::ConfigCommand::DefaultName { pattern } => configure_default_name(pattern),
     }
 }
@@ -1333,11 +1335,65 @@ fn configure_storage(
     Ok(())
 }
 
-fn show_current_config() -> Result<()> {
-    let config = config::get_config()?;
-    show_config(&config.storage.to_runtime());
-    show_snapshot_config(&config.snapshot);
+fn show_current_config(show_paths: bool, workspace_context: bool, workspace_path: Option<&Path>) -> Result<()> {
+    if workspace_context {
+        // Show config from workspace perspective
+        if let Some(workspace_path) = workspace_path {
+            let (storage_config, resolution_info) = config::get_storage_config_with_resolution_info(Some(workspace_path))?;
+            show_config_with_resolution(&storage_config, &resolution_info, show_paths);
+        } else {
+            // Try to find workspace
+            if let Ok(workspace) = SnapbaseWorkspace::find_or_create(None) {
+                let (storage_config, resolution_info) = config::get_storage_config_with_resolution_info(Some(&workspace.root))?;
+                show_config_with_resolution(&storage_config, &resolution_info, show_paths);
+            } else {
+                println!("⚠️  No workspace found. Use 'snapbase init' to create one or specify --workspace.");
+                return show_current_config(show_paths, false, workspace_path);
+            }
+        }
+    } else {
+        // Show global config
+        let config = config::get_config()?;
+        let (_, resolution_info) = config::get_storage_config_with_resolution_info(workspace_path)?;
+        show_config_with_resolution(&config.storage.to_runtime(), &resolution_info, show_paths);
+        show_snapshot_config(&config.snapshot);
+    }
+    
     Ok(())
+}
+
+fn show_config_with_resolution(config: &config::StorageConfig, resolution_info: &config::ConfigResolutionInfo, show_paths: bool) {
+    if show_paths {
+        println!("Configuration Resolution:");
+        println!("  Source: {}", resolution_info.config_source);
+        if let Some(config_path) = &resolution_info.config_path {
+            println!("  Config file: {}", config_path);
+        } else {
+            println!("  Config file: <none - using defaults>");
+        }
+        if let Some(workspace_path) = &resolution_info.workspace_path {
+            println!("  Workspace: {}", workspace_path);
+        }
+        
+        println!("\nResolution order (first found wins):");
+        for (i, source) in resolution_info.resolution_order.iter().enumerate() {
+            let marker = if let Some(ref used_config_path) = resolution_info.config_path {
+                if source.contains(used_config_path) {
+                    " ✓"
+                } else {
+                    ""
+                }
+            } else if resolution_info.config_source == "default" && source.contains("defaults") {
+                " ✓"
+            } else {
+                ""
+            };
+            println!("  {}. {}{}", i + 1, source, marker);
+        }
+        println!();
+    }
+    
+    show_config(config);
 }
 
 fn show_config(config: &config::StorageConfig) {

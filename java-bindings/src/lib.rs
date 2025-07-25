@@ -11,7 +11,7 @@ use jni::JNIEnv;
 use std::path::{Path, PathBuf};
 
 use snapbase_core::{
-    change_detection::StreamingChangeDetector, config::get_snapshot_config, naming::SnapshotNamer,
+    change_detection::StreamingChangeDetector, config::get_snapshot_config_with_workspace, naming::SnapshotNamer,
     query::SnapshotQueryEngine, resolver::SnapshotResolver, snapshot::SnapshotMetadata,
     ExportFormat, ExportOptions, Result as SnapbaseResult, SnapbaseWorkspace, UnifiedExporter,
 };
@@ -597,7 +597,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
             }
         };
 
-        let snapshot_config = match get_snapshot_config() {
+        let snapshot_config = match get_snapshot_config_with_workspace(Some(&workspace_handle.workspace.root)) {
             Ok(config) => config,
             Err(e) => {
                 let _ = env.throw_new(
@@ -1387,6 +1387,52 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeExport<'local>(
     );
 
     match string_to_jstring(&mut env, &result_message) {
+        Ok(jstr) => jstr.into_raw(),
+        Err(_) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                "Failed to create result string",
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Get configuration resolution information for debugging
+#[no_mangle]
+pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetConfigInfo<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) -> jstring {
+    let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
+    
+    let resolution_info = match snapbase_core::config::get_config_resolution_info(Some(&workspace_handle.workspace.root)) {
+        Ok(info) => info,
+        Err(e) => {
+            let error_msg = format!("Failed to get config info: {e}");
+            let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
+            return std::ptr::null_mut();
+        }
+    };
+    
+    let info_json = serde_json::json!({
+        "config_source": resolution_info.config_source,
+        "config_path": resolution_info.config_path,
+        "workspace_path": resolution_info.workspace_path,
+        "resolution_order": resolution_info.resolution_order
+    });
+    
+    let json_string = match serde_json::to_string_pretty(&info_json) {
+        Ok(s) => s,
+        Err(e) => {
+            let error_msg = format!("Failed to serialize config info: {e}");
+            let _ = env.throw_new("com/snapbase/SnapbaseException", &error_msg);
+            return std::ptr::null_mut();
+        }
+    };
+    
+    match string_to_jstring(&mut env, &json_string) {
         Ok(jstr) => jstr.into_raw(),
         Err(_) => {
             let _ = env.throw_new(

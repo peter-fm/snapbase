@@ -230,7 +230,15 @@ pub enum ConfigCommand {
     },
 
     /// Show current configuration
-    Show,
+    Show {
+        /// Show config file paths and resolution order
+        #[arg(long)]
+        paths: bool,
+
+        /// Show configuration from workspace context (requires workspace to be initialized)
+        #[arg(long)]
+        workspace_context: bool,
+    },
 
     /// Set default snapshot naming pattern
     DefaultName {
