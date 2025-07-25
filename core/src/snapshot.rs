@@ -287,16 +287,8 @@ impl SnapshotCreator {
         if full_data {
             let parquet_path = hive_dir.join("data.parquet");
             
-            // Load baseline data for change detection if parent snapshot exists
-            // For first snapshot, baseline_data will be None, resulting in all rows marked as "added"
-            let baseline_data = if let Some(parent_info) = _delta_from_parent {
-                self.load_baseline_data_for_comparison(workspace_base, &parent_info.parent_name)?
-            } else {
-                None
-            };
-            
-            // Use DuckDB's COPY command to export directly to Parquet with change flags
-            data_processor.export_to_parquet_with_flags(&parquet_path, baseline_data.as_ref())?;
+            // Use DuckDB's COPY command to export directly to Parquet
+            data_processor.export_to_parquet(&parquet_path)?;
         }
         
         Ok(())
@@ -307,7 +299,7 @@ impl SnapshotCreator {
         &self,
         workspace_base: &Path,
         parent_name: &str,
-    ) -> Result<Option<crate::data::BaselineData>> {
+    ) -> Result<()> {
         // Find the parent snapshot in the Hive structure
         let sources_dir = workspace_base.join("sources");
         
@@ -373,13 +365,13 @@ impl SnapshotCreator {
                             Vec::new()
                         };
                         
-                        return Ok(Some(crate::data::BaselineData { schema, data }));
+                        return Ok(()); // BaselineData removed
                     }
                 }
             }
         }
         
-        Ok(None)
+        Ok(())
     }
 
     /// Load data from parquet file using DuckDB

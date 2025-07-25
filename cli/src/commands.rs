@@ -10,7 +10,7 @@ use snapbase_core::data::DataProcessor;
 use snapbase_core::error::{Result, SnapbaseError};
 use snapbase_core::resolver::{SnapshotRef, SnapshotResolver};
 use snapbase_core::workspace::SnapbaseWorkspace;
-use snapbase_core::change_detection::{ChangeDetector, StreamingChangeDetector};
+use snapbase_core::change_detection::StreamingChangeDetector;
 use snapbase_core::naming::SnapshotNamer;
 use snapbase_core::config::{get_snapshot_config, get_database_config};
 use snapbase_core::database::{discover_database_tables, create_table_snapshot_sql, TableInfo};
@@ -849,31 +849,9 @@ fn status_command(
         data_processor.load_cloud_storage_data(data_path, &workspace).await
     })?;
 
-    // Load current data
-    let mut current_data_processor = DataProcessor::new_with_workspace(&workspace)?;
-    let current_data_info = current_data_processor.load_file(&input_path)?;
-    let current_row_data = current_data_processor.extract_all_data()?;
-
-    // Extract baseline schema from metadata
-    let baseline_schema = baseline_metadata.columns.clone();
-
-    // Use comprehensive change detection
-    let changes = ChangeDetector::detect_changes(
-        &baseline_schema,
-        &baseline_row_data,
-        &current_data_info.columns,
-        &current_row_data,
-    )?;
-
-    // Output results
-    if json {
-        let status_json = JsonFormatter::format_comprehensive_status_results(&changes)?;
-        println!("{status_json}");
-    } else {
-        PrettyPrinter::print_comprehensive_status_results(&changes, quiet);
-    }
-
-    Ok(())
+    // TODO: Replace with streaming-based change detection
+    // extract_all_data removed - will implement on-demand comparison using SQL JOINs
+    return Err(SnapbaseError::archive("Status command temporarily disabled during refactor to streaming model"));
 }
 
 /// List all snapshots
@@ -1295,7 +1273,7 @@ fn create_hive_snapshot(
         .unwrap_or_else(|_| input_path.to_path_buf())
         .to_string_lossy()
         .to_string();
-    let baseline_data = load_baseline_data_for_cli(workspace, &canonical_input_path, source_name)?;
+    // Simplified: no baseline data needed for pure streaming approach
 
     // Create Parquet file using DuckDB COPY - get storage backend path
     let parquet_relative_path = format!("{hive_path_str}/data.parquet");
@@ -1377,7 +1355,7 @@ fn create_hive_snapshot(
         
         // Create a local path for the export
         let temp_path = std::path::Path::new(&parquet_path);
-        processor.export_to_parquet_with_flags(temp_path, baseline_data.as_ref())?;
+        processor.export_to_parquet(temp_path)?;
         
         let elapsed = start_time.elapsed();
         println!("⚡ Direct copy completed in {:.1}s", elapsed.as_secs_f64());
@@ -1595,7 +1573,7 @@ fn load_baseline_data_for_cli(
     workspace: &SnapbaseWorkspace,
     canonical_source_path: &str,
     source_name: &str,
-) -> Result<Option<snapbase_core::data::BaselineData>> {
+) -> Result<()> {
     // Find the latest snapshot for this source
     let latest_snapshot = workspace.latest_snapshot_for_source(canonical_source_path)?;
 
@@ -1651,11 +1629,11 @@ fn load_baseline_data_for_cli(
             // Load parquet data using DuckDB
             let data = load_parquet_data_from_storage(workspace, &parquet_path, &schema)?;
             
-            return Ok(Some(snapbase_core::data::BaselineData { schema, data }));
+            return Ok(()); // BaselineData removed
         }
     }
     
-    Ok(None)
+    Ok(())
 }
 
 /// Load parquet data from storage backend
@@ -1977,101 +1955,6 @@ fn streaming_diff_command(
     
     Ok(())
 }
-
-/// Compare two snapshots (original implementation - kept for fallback)
-fn diff_command(
-    workspace_path: Option<&Path>,
-    source: &str,
-    from_snapshot: &str,
-    to_snapshot: &str,
-    json: bool,
-) -> Result<()> {
-    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
-    let resolver = SnapshotResolver::new(workspace.clone());
-    
-    // Resolve both snapshots
-    let from_resolved = resolver.resolve_by_name_for_source(from_snapshot, Some(source))?;
-    let to_resolved = resolver.resolve_by_name_for_source(to_snapshot, Some(source))?;
-    
-    println!("🔍 Comparing snapshots '{from_snapshot}' → '{to_snapshot}'");
-    
-    // Load metadata for both snapshots
-    let rt = tokio::runtime::Runtime::new()?;
-    
-    let from_metadata = if let Some(preloaded) = from_resolved.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &from_resolved.json_path {
-        let metadata_data = rt.block_on(async {
-            workspace.storage().read_file(json_path).await
-        })?;
-        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
-    } else {
-        return Err(SnapbaseError::SnapshotNotFound {
-            name: from_snapshot.to_string(),
-        });
-    };
-    
-    let to_metadata = if let Some(preloaded) = to_resolved.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &to_resolved.json_path {
-        let metadata_data = rt.block_on(async {
-            workspace.storage().read_file(json_path).await
-        })?;
-        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
-    } else {
-        return Err(SnapbaseError::SnapshotNotFound {
-            name: to_snapshot.to_string(),
-        });
-    };
-    
-    // Load data for both snapshots
-    let mut data_processor = DataProcessor::new_with_workspace(&workspace)?;
-    
-    let from_data_path = from_resolved.data_path.as_ref().ok_or_else(|| {
-        SnapbaseError::archive("From snapshot has no data path")
-    })?;
-
-    let to_data_path = to_resolved.data_path.as_ref().ok_or_else(|| {
-        SnapbaseError::archive("To snapshot has no data path")  
-    })?;
-
-    let mut progress_reporter = ProgressReporter::new_for_diff();
-    progress_reporter.update_archive("Loading snapshot data...");
-    
-    let from_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(from_data_path, &workspace).await
-    })?;
-    println!("FROM DATA {from_row_data:?}");
-    progress_reporter.update_archive("Loading comparison data...");
-    
-    let to_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(to_data_path, &workspace).await
-    })?;
-    println!("TO DATA {to_row_data:?}");
-
-    progress_reporter.update_archive("Detecting changes...");
-    
-    // Perform change detection
-    let changes = ChangeDetector::detect_changes(
-        &from_metadata.columns,
-        &from_row_data,
-        &to_metadata.columns,
-        &to_row_data,
-    )?;
-    
-    progress_reporter.finish_all("Comparison completed");
-    
-    // Output results
-    if json {
-        let diff_json = serde_json::to_value(&changes)?;
-        println!("{}", serde_json::to_string_pretty(&diff_json)?);
-    } else {
-        PrettyPrinter::print_diff_results(&serde_json::to_value(&changes)?);
-    }
-    
-    Ok(())
-}
-
 
 #[cfg(test)]
 mod tests {

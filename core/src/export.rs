@@ -137,20 +137,20 @@ impl UnifiedExporter {
 
         // Create the view with Hive-style partitioning
         let mut view_sql = format!(
-            "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp, __snapbase_added, __snapbase_modified) FROM read_parquet('{}')",
+            "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{}')",
             base_path
         );
 
         // Add snapshot filtering if specified
         if let Some(snapshot_name) = &options.snapshot_name {
             view_sql = format!(
-                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp, __snapbase_added, __snapbase_modified) FROM read_parquet('{}') WHERE snapshot_name = '{}'",
+                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{}') WHERE snapshot_name = '{}'",
                 base_path, snapshot_name
             );
         } else if let Some(snapshot_date) = &options.snapshot_date {
             // For date-based filtering, we'd need to parse the timestamp
             view_sql = format!(
-                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp, __snapbase_added, __snapbase_modified) FROM read_parquet('{}') WHERE DATE(snapshot_timestamp) = '{}'",
+                "CREATE OR REPLACE VIEW export_data AS SELECT * EXCLUDE (snapshot_name, snapshot_timestamp) FROM read_parquet('{}') WHERE DATE(snapshot_timestamp) = '{}'",
                 base_path, snapshot_date
             );
         }

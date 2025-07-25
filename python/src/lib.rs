@@ -11,7 +11,7 @@ use snapbase_core::{
     SnapbaseWorkspace, 
     Result as SnapbaseResult,
     data::DataProcessor,
-    change_detection::ChangeDetector,
+    change_detection::StreamingChangeDetector,
     resolver::SnapshotResolver,
     snapshot::SnapshotMetadata,
     query::SnapshotQueryEngine,
@@ -118,48 +118,31 @@ impl Workspace {
         let baseline_snapshot = resolver.resolve_by_name_for_source(baseline, Some(file_path))
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve baseline snapshot: {}", e)))?;
         
-        // Load baseline metadata and data
+        // Create runtime for async operations
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
-            
-        let baseline_metadata = if let Some(preloaded) = baseline_snapshot.get_metadata() {
-            preloaded.clone()
-        } else if let Some(json_path) = &baseline_snapshot.json_path {
-            let metadata_data = rt.block_on(async {
-                self.workspace.storage().read_file(json_path).await
-            }).map_err(|e| PyRuntimeError::new_err(format!("Failed to read baseline metadata: {}", e)))?;
-            serde_json::from_slice::<SnapshotMetadata>(&metadata_data)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to parse baseline metadata: {}", e)))?
-        } else {
-            return Err(PyRuntimeError::new_err("Baseline snapshot not found"));
-        };
         
-        // Load baseline data
+        // Get baseline data path and create data sources for streaming comparison
         let data_path = baseline_snapshot.data_path.as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Baseline snapshot has no data path"))?;
+        let baseline_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
+            path: data_path.clone(),
+            workspace: self.workspace.clone(),
+        };
+        let current_source = snapbase_core::change_detection::DataSource::File(input_path);
         
-        let mut data_processor = DataProcessor::new_with_workspace(&self.workspace)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create data processor: {}", e)))?;
-            
-        let baseline_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&data_path, &self.workspace).await
-        }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load baseline data: {}", e)))?;
+        // Configure comparison options
+        let options = snapbase_core::change_detection::ComparisonOptions::default();
         
-        // Load current data
-        let mut current_data_processor = DataProcessor::new_with_workspace(&self.workspace)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create current data processor: {}", e)))?;
-        let current_data_info = current_data_processor.load_file(&input_path)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to load current file: {}", e)))?;
-        let current_row_data = current_data_processor.extract_all_data()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract current data: {}", e)))?;
-        
-        // Perform change detection
-        let changes = ChangeDetector::detect_changes(
-            &baseline_metadata.columns,
-            &baseline_row_data,
-            &current_data_info.columns,
-            &current_row_data,
-        ).map_err(|e| PyRuntimeError::new_err(format!("Failed to check status: {}", e)))?;
+        // Perform streaming change detection
+        let changes = rt.block_on(async {
+            StreamingChangeDetector::compare_data_sources(
+                baseline_source,
+                current_source,
+                options,
+                None, // No progress callback for now
+            ).await
+        }).map_err(|e| PyRuntimeError::new_err(format!("Failed to detect changes: {}", e)))?;
         
         Ok(changes)
     }
@@ -254,58 +237,36 @@ impl Workspace {
         let to_resolved = resolver.resolve_by_name_for_source(to_snapshot, Some(source))
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to resolve to snapshot: {}", e)))?;
         
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
-        
-        // Load metadata for both snapshots
-        let from_metadata = if let Some(preloaded) = from_resolved.get_metadata() {
-            preloaded.clone()
-        } else if let Some(json_path) = &from_resolved.json_path {
-            let metadata_data = rt.block_on(async {
-                self.workspace.storage().read_file(json_path).await
-            }).map_err(|e| PyRuntimeError::new_err(format!("Failed to read from metadata: {}", e)))?;
-            serde_json::from_slice::<SnapshotMetadata>(&metadata_data)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to parse from metadata: {}", e)))?
-        } else {
-            return Err(PyRuntimeError::new_err("From snapshot not found"));
-        };
-        
-        let to_metadata = if let Some(preloaded) = to_resolved.get_metadata() {
-            preloaded.clone()
-        } else if let Some(json_path) = &to_resolved.json_path {
-            let metadata_data = rt.block_on(async {
-                self.workspace.storage().read_file(json_path).await
-            }).map_err(|e| PyRuntimeError::new_err(format!("Failed to read to metadata: {}", e)))?;
-            serde_json::from_slice::<SnapshotMetadata>(&metadata_data)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to parse to metadata: {}", e)))?
-        } else {
-            return Err(PyRuntimeError::new_err("To snapshot not found"));
-        };
-        
-        // Load data for both snapshots
-        let mut data_processor = DataProcessor::new_with_workspace(&self.workspace)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create data processor: {}", e)))?;
-        
+        // Create data sources for streaming comparison
         let from_data_path = from_resolved.data_path.as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("From snapshot has no data path"))?;
         let to_data_path = to_resolved.data_path.as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("To snapshot has no data path"))?;
+            
+        let baseline_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
+            path: from_data_path.clone(),
+            workspace: self.workspace.clone(),
+        };
+        let current_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
+            path: to_data_path.clone(),
+            workspace: self.workspace.clone(),
+        };
         
-        let from_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&from_data_path, &self.workspace).await
-        }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load from data: {}", e)))?;
+        // Configure comparison options
+        let options = snapbase_core::change_detection::ComparisonOptions::default();
         
-        let to_row_data = rt.block_on(async {
-            data_processor.load_cloud_storage_data(&to_data_path, &self.workspace).await
-        }).map_err(|e| PyRuntimeError::new_err(format!("Failed to load to data: {}", e)))?;
-        
-        // Perform change detection
-        let changes = ChangeDetector::detect_changes(
-            &from_metadata.columns,
-            &from_row_data,
-            &to_metadata.columns,
-            &to_row_data,
-        ).map_err(|e| PyRuntimeError::new_err(format!("Failed to detect changes: {}", e)))?;
+        // Perform streaming change detection
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
+            
+        let changes = rt.block_on(async {
+            StreamingChangeDetector::compare_data_sources(
+                baseline_source,
+                current_source,
+                options,
+                None, // No progress callback for now
+            ).await
+        }).map_err(|e| PyRuntimeError::new_err(format!("Failed to detect changes: {}", e)))?;
         
         Ok(changes)
     }
@@ -385,7 +346,7 @@ fn create_hive_snapshot(
     
     // Export to Parquet using the same method as CLI
     let temp_path = std::path::Path::new(&parquet_path);
-    processor.export_to_parquet_with_flags(temp_path, None)?;
+    processor.export_to_parquet(temp_path)?;
     
     // Create metadata
     let metadata = SnapshotMetadata {

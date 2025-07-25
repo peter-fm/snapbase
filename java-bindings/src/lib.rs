@@ -14,7 +14,7 @@ use snapbase_core::{
     SnapbaseWorkspace, 
     Result as SnapbaseResult,
     data::DataProcessor,
-    change_detection::ChangeDetector,
+    change_detection::StreamingChangeDetector,
     resolver::SnapshotResolver,
     snapshot::SnapshotMetadata,
     query::SnapshotQueryEngine,
@@ -624,32 +624,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
         }
     };
     
-    // Load baseline metadata and data
-    let baseline_metadata = if let Some(preloaded) = baseline_snapshot.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &baseline_snapshot.json_path {
-        let metadata_data = match workspace_handle.runtime.block_on(async {
-            workspace_handle.workspace.storage().read_file(json_path).await
-        }) {
-            Ok(data) => data,
-            Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to read baseline metadata: {e}"));
-                return std::ptr::null_mut();
-            }
-        };
-        match serde_json::from_slice::<SnapshotMetadata>(&metadata_data) {
-            Ok(metadata) => metadata,
-            Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to parse baseline metadata: {e}"));
-                return std::ptr::null_mut();
-            }
-        }
-    } else {
-        let _ = env.throw_new("com/snapbase/SnapbaseException", "Baseline snapshot not found");
-        return std::ptr::null_mut();
-    };
-    
-    // Load baseline data
+    // Get baseline data path for streaming comparison
     let data_path = match baseline_snapshot.data_path.as_ref() {
         Some(path) => path,
         None => {
@@ -658,58 +633,28 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
         }
     };
     
-    let mut data_processor = match DataProcessor::new_with_workspace(&workspace_handle.workspace) {
-        Ok(processor) => processor,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create data processor: {e}"));
-            return std::ptr::null_mut();
-        }
+    // Create data sources for streaming comparison
+    let baseline_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
+        path: data_path.clone(),
+        workspace: workspace_handle.workspace.clone(),
     };
+    let current_source = snapbase_core::change_detection::DataSource::File(input_path);
     
-    // Convert storage path to DuckDB-accessible path
-    let baseline_row_data = match workspace_handle.runtime.block_on(async {
-        data_processor.load_cloud_storage_data(&data_path, &workspace_handle.workspace).await
+    // Configure comparison options
+    let options = snapbase_core::change_detection::ComparisonOptions::default();
+    
+    // Perform streaming change detection
+    let changes = match workspace_handle.runtime.block_on(async {
+        StreamingChangeDetector::compare_data_sources(
+            baseline_source,
+            current_source,
+            options,
+            None, // No progress callback for now
+        ).await
     }) {
-        Ok(data) => data,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to load baseline data: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    // Load current data
-    let mut current_data_processor = match DataProcessor::new_with_workspace(&workspace_handle.workspace) {
-        Ok(processor) => processor,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create current data processor: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-    let current_data_info = match current_data_processor.load_file(&input_path) {
-        Ok(info) => info,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to load current file: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-    let current_row_data = match current_data_processor.extract_all_data() {
-        Ok(data) => data,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to extract current data: {e}"));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    // Perform change detection
-    let changes = match ChangeDetector::detect_changes(
-        &baseline_metadata.columns,
-        &baseline_row_data,
-        &current_data_info.columns,
-        &current_row_data,
-    ) {
         Ok(changes) => changes,
         Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to check status: {e}"));
+            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to detect changes: {}", e));
             return std::ptr::null_mut();
         }
     };
@@ -1165,13 +1110,28 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
         }
     };
     
-    // Perform change detection
-    let changes = match ChangeDetector::detect_changes(
-        &from_metadata.columns,
-        &from_row_data,
-        &to_metadata.columns,
-        &to_row_data,
-    ) {
+    // Create data sources for streaming comparison
+    let baseline_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
+        path: from_data_path.clone(),
+        workspace: workspace_handle.workspace.clone(),
+    };
+    let current_source = snapbase_core::change_detection::DataSource::StoredSnapshot {
+        path: to_data_path.clone(),
+        workspace: workspace_handle.workspace.clone(),
+    };
+    
+    // Configure comparison options
+    let options = snapbase_core::change_detection::ComparisonOptions::default();
+    
+    // Perform streaming change detection
+    let changes = match rt.block_on(async {
+        StreamingChangeDetector::compare_data_sources(
+            baseline_source,
+            current_source,
+            options,
+            None, // No progress callback for now
+        ).await
+    }) {
         Ok(changes) => changes,
         Err(e) => {
             let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to detect changes: {}", e));
@@ -1331,7 +1291,7 @@ fn create_hive_snapshot(
     
     // Export to Parquet using the same method as CLI
     let temp_path = std::path::Path::new(&parquet_path);
-    processor.export_to_parquet_with_flags(temp_path, None)?;
+    processor.export_to_parquet(temp_path)?;
     
     // Create metadata
     let metadata = SnapshotMetadata {

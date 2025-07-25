@@ -32,7 +32,7 @@ pub use error::{Result, SnapbaseError};
 pub use workspace::SnapbaseWorkspace;
 pub use resolver::SnapshotResolver;
 pub use snapshot::{SnapshotMetadata, SnapshotCreator};
-pub use change_detection::{ChangeDetector, ChangeDetectionResult};
+pub use change_detection::{StreamingChangeDetector, ChangeDetectionResult};
 pub use storage::StorageBackend;
 pub use config::Config;
 pub use export::{UnifiedExporter, ExportFormat, ExportOptions};

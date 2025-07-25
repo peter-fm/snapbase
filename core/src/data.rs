@@ -8,8 +8,6 @@ use duckdb::Connection;
 use std::collections::HashMap;
 use std::path::Path;
 
-// Type alias for complex return types
-type DataChangeResult = (Vec<(Vec<String>, bool, bool)>, Vec<crate::hash::ColumnInfo>);
 
 fn get_duckdb_install_instructions() -> String {
     if cfg!(target_os = "windows") {
@@ -452,10 +450,6 @@ impl DataProcessor {
         Ok(columns)
     }
 
-    /// Extract all data as rows of strings
-    pub fn extract_all_data(&mut self) -> Result<Vec<Vec<String>>> {
-        self.extract_data_chunked_with_progress(None)
-    }
 
     /// Extract data in chunks with progress reporting for better memory efficiency
     pub fn extract_data_chunked_with_progress(
@@ -720,200 +714,26 @@ impl DataProcessor {
 
     /// Export current data to Parquet file using DuckDB COPY
     pub fn export_to_parquet(&mut self, parquet_path: &Path) -> Result<()> {
-        self.export_to_parquet_with_flags(parquet_path, None)
-    }
-
-    /// Export current data to Parquet file with optional change detection flags
-    pub fn export_to_parquet_with_flags(
-        &mut self, 
-        parquet_path: &Path, 
-        baseline_data: Option<&BaselineData>
-    ) -> Result<()> {
-        // Get current data and schema
-        let current_schema = self.get_column_info()?;
-        let current_data = self.extract_all_data()?;
-        
-        // Compute flags using existing change detection system
-        let (flag_data, final_schema) = if let Some(baseline) = baseline_data {
-            self.compute_flags_with_change_detection(&baseline.schema, &baseline.data, &current_schema, &current_data)?
+        let copy_sql = if let Some(ref sql_query) = self.streaming_query {
+            // SQL file - use the stored query
+            format!(
+                "COPY ({}) TO '{}' (FORMAT parquet)",
+                sql_query,
+                parquet_path.to_string_lossy()
+            )
         } else {
-            // No baseline - all rows are considered "added" (first snapshot)
-            let flag_data: Vec<(Vec<String>, bool, bool)> = current_data.into_iter()
-                .map(|row| (row, true, false)) // (data, added, modified)
-                .collect();
-            let mut final_schema = current_schema.clone();
-            final_schema.extend(vec![
-                crate::hash::ColumnInfo { name: "__snapbase_added".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
-                crate::hash::ColumnInfo { name: "__snapbase_modified".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
-            ]);
-            (flag_data, final_schema)
+            // Regular file - direct copy from data_view
+            format!(
+                "COPY (SELECT * FROM data_view) TO '{}' (FORMAT parquet)",
+                parquet_path.to_string_lossy()
+            )
         };
         
-        // Create a temporary table with the flag data
-        self.create_temp_table_with_flags(&final_schema, &flag_data)?;
-        
-        // Export to Parquet using DuckDB's COPY command
-        let copy_sql = format!(
-            "COPY (SELECT * FROM temp_flag_data) TO '{}' (FORMAT parquet)",
-            parquet_path.to_string_lossy()
-        );
-        
         self.connection.execute(&copy_sql, [])?;
-        
-        Ok(())
-    }
-
-    /// Compute flags using the existing change detection system
-    fn compute_flags_with_change_detection(
-        &self,
-        baseline_schema: &[crate::hash::ColumnInfo],
-        baseline_data: &[Vec<String>],
-        current_schema: &[crate::hash::ColumnInfo],
-        current_data: &[Vec<String>],
-    ) -> Result<DataChangeResult> {
-        // Use the existing change detection system
-        let changes = crate::change_detection::ChangeDetector::detect_changes(
-            baseline_schema,
-            baseline_data,
-            current_schema,
-            current_data,
-        )?;
-        
-        
-        // Create flag mappings for current data rows
-        let mut current_row_flags: std::collections::HashMap<usize, (bool, bool)> = std::collections::HashMap::new();
-        
-        // Mark added rows (row_index refers to current data position)
-        for addition in &changes.row_changes.added {
-            current_row_flags.insert(addition.row_index as usize, (true, false)); // (added, modified)
-        }
-        
-        // Mark modified rows (row_index refers to current data position)
-        for modification in &changes.row_changes.modified {
-            // Check if this is a "total change" (all non-ID fields changed) - treat as addition
-            let total_fields_changed = modification.changes.len();
-            let total_fields = current_schema.len();
-            
-            if total_fields_changed >= total_fields * 2 / 3 {
-                // If most fields changed, treat as addition (assume this is a new row)
-                current_row_flags.insert(modification.row_index as usize, (true, false)); // (added, modified)
-            } else {
-                current_row_flags.insert(modification.row_index as usize, (false, true)); // (added, modified)
-            }
-        }
-        
-        // Create result data with flags - only include current data (no removed rows)
-        let mut flag_data = Vec::new();
-        
-        // Add current data rows with their flags
-        for (index, row) in current_data.iter().enumerate() {
-            let flags = current_row_flags.get(&index).unwrap_or(&(false, false));
-            flag_data.push((row.clone(), flags.0, flags.1));
-        }
-        
-        // Note: Removed rows are NOT added to snapshots - this creates true snapshots
-        
-        // Create final schema with flag columns (no removed column)
-        let mut final_schema = current_schema.to_vec();
-        final_schema.extend(vec![
-            crate::hash::ColumnInfo { name: "__snapbase_added".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
-            crate::hash::ColumnInfo { name: "__snapbase_modified".to_string(), data_type: "BOOLEAN".to_string(), nullable: false },
-        ]);
-        
-        Ok((flag_data, final_schema))
-    }
-
-    /// Create a temporary table with flag data
-    fn create_temp_table_with_flags(
-        &mut self,
-        schema: &[crate::hash::ColumnInfo],
-        flag_data: &[(Vec<String>, bool, bool)],
-    ) -> Result<()> {
-        // Drop existing temp table
-        self.connection.execute("DROP TABLE IF EXISTS temp_flag_data", [])?;
-        
-        // Create table schema
-        let mut create_sql = String::from("CREATE TABLE temp_flag_data (");
-        for (i, col) in schema.iter().enumerate() {
-            if i > 0 {
-                create_sql.push_str(", ");
-            }
-            create_sql.push_str(&format!("{} {}", col.name, col.data_type));
-        }
-        create_sql.push(')');
-        
-        self.connection.execute(&create_sql, [])?;
-        
-        // Insert data using DuckDB parameterized queries (proper way)
-        if !flag_data.is_empty() {
-            // Build placeholders for parameterized query
-            let placeholders: Vec<String> = (0..schema.len()).map(|_| "?".to_string()).collect();
-            let insert_sql = format!(
-                "INSERT INTO temp_flag_data VALUES ({})",
-                placeholders.join(", ")
-            );
-            
-            let mut stmt = self.connection.prepare(&insert_sql)?;
-            
-            for (row_data, added, modified) in flag_data {
-                // Build parameter slice - DuckDB will handle type conversion automatically
-                let mut params: Vec<&dyn duckdb::ToSql> = Vec::new();
-                
-                // Add original data columns as string references
-                for value in row_data.iter() {
-                    params.push(value);
-                }
-                
-                // Add flag columns (only added and modified)
-                params.push(added); 
-                params.push(modified);
-                
-                stmt.execute(&params[..])?;
-            }
-        }
-        
         Ok(())
     }
 
 
-    /// Load baseline data into a temporary table for comparison
-    pub fn load_baseline_data(&mut self, baseline: &BaselineData) -> Result<()> {
-        // Drop existing baseline table if it exists
-        self.connection.execute("DROP TABLE IF EXISTS baseline_data", [])?;
-        
-        // Create baseline table with same structure as current data
-        let mut create_sql = String::from("CREATE TABLE baseline_data (");
-        for (i, col) in baseline.schema.iter().enumerate() {
-            if i > 0 {
-                create_sql.push_str(", ");
-            }
-            create_sql.push_str(&format!("{} {}", col.name, col.data_type));
-        }
-        create_sql.push(')');
-        
-        self.connection.execute(&create_sql, [])?;
-        
-        // Insert baseline data using parameterized queries
-        if !baseline.data.is_empty() {
-            // Build placeholders for parameterized query
-            let num_cols = baseline.schema.len();
-            let placeholders: Vec<String> = (0..num_cols).map(|_| "?".to_string()).collect();
-            let insert_sql = format!(
-                "INSERT INTO baseline_data VALUES ({})",
-                placeholders.join(", ")
-            );
-            
-            let mut stmt = self.connection.prepare(&insert_sql)?;
-            
-            for row in &baseline.data {
-                // Build parameter slice - DuckDB will handle type conversion automatically
-                let params: Vec<&dyn duckdb::ToSql> = row.iter().map(|v| v as &dyn duckdb::ToSql).collect();
-                stmt.execute(&params[..])?;
-            }
-        }
-        
-        Ok(())
-    }
 
     /// Stream data row by row with callback for memory efficiency
     pub fn stream_data_with_progress<F>(
@@ -2081,12 +1901,6 @@ pub struct DataInfo {
     pub columns: Vec<ColumnInfo>,
 }
 
-/// Baseline data for change detection
-#[derive(Debug, Clone)]
-pub struct BaselineData {
-    pub schema: Vec<ColumnInfo>,
-    pub data: Vec<Vec<String>>,
-}
 
 impl DataInfo {
     pub fn column_count(&self) -> usize {
