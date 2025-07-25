@@ -24,7 +24,11 @@ usage() {
     echo "This script updates the version in:"
     echo "  - Cargo.toml (Rust workspace)"
     echo "  - java/pom.xml (Java Maven project)"
+    echo "  - java/dependency-reduced-pom.xml (Generated Maven file)"
     echo "  - python/pyproject.toml (Python project)"
+    echo "  - python/Cargo.toml (Python Rust bindings)"
+    echo "  - python/src/snapbase/__init__.py (Python module)"
+    echo "  - .github/workflows/release.yml (CI/CD pipeline)"
     exit 1
 }
 
@@ -76,14 +80,33 @@ fi
 # Update Java Maven version
 print_info "Updating Java Maven version..."
 JAVA_FILE="$SCRIPT_DIR/java/pom.xml"
-CURRENT_JAVA_VERSION=$(get_current_version "$JAVA_FILE" '<version>[^<]*</version>' | head -1 | sed 's/<version>\([^<]*\)<\/version>/\1/')
+CURRENT_JAVA_VERSION=$(grep -o '<version>[^<]*</version>' "$JAVA_FILE" | head -1 | sed 's/<version>\([^<]*\)<\/version>/\1/')
 
-if [ "$CURRENT_JAVA_VERSION" != "unknown" ]; then
+if [ "$CURRENT_JAVA_VERSION" != "" ] && [ "$CURRENT_JAVA_VERSION" != "unknown" ]; then
     print_info "Current Java version: $CURRENT_JAVA_VERSION"
-    sed -i.bak "0,/<version>$CURRENT_JAVA_VERSION<\/version>/s//<version>$NEW_VERSION<\/version>/" "$JAVA_FILE"
+    # Use a simpler sed approach - replace the first occurrence
+    sed -i.bak "s/<version>$CURRENT_JAVA_VERSION<\/version>/<version>$NEW_VERSION<\/version>/" "$JAVA_FILE"
     print_info "✓ Updated $JAVA_FILE"
 else
     print_warn "Could not detect current Java version"
+fi
+
+# Update Java dependency-reduced-pom.xml (if exists)
+print_info "Updating Java dependency-reduced-pom.xml..."
+JAVA_DEP_FILE="$SCRIPT_DIR/java/dependency-reduced-pom.xml"
+if [ -f "$JAVA_DEP_FILE" ]; then
+    CURRENT_JAVA_DEP_VERSION=$(grep -o '<version>[^<]*</version>' "$JAVA_DEP_FILE" | head -1 | sed 's/<version>\([^<]*\)<\/version>/\1/')
+    
+    if [ "$CURRENT_JAVA_DEP_VERSION" != "" ] && [ "$CURRENT_JAVA_DEP_VERSION" != "unknown" ]; then
+        print_info "Current Java dependency-reduced version: $CURRENT_JAVA_DEP_VERSION"
+        # Use a simpler sed approach - replace the first occurrence
+        sed -i.bak "s/<version>$CURRENT_JAVA_DEP_VERSION<\/version>/<version>$NEW_VERSION<\/version>/" "$JAVA_DEP_FILE"
+        print_info "✓ Updated $JAVA_DEP_FILE"
+    else
+        print_warn "Could not detect current Java dependency-reduced version"
+    fi
+else
+    print_info "Java dependency-reduced-pom.xml not found (this is normal)"
 fi
 
 # Update Python version
@@ -99,6 +122,43 @@ else
     print_warn "Could not detect current Python version"
 fi
 
+# Update Python Cargo.toml
+print_info "Updating Python Cargo.toml..."
+PYTHON_CARGO_FILE="$SCRIPT_DIR/python/Cargo.toml"
+CURRENT_PYTHON_CARGO_VERSION=$(get_current_version "$PYTHON_CARGO_FILE" 'version = "[^"]*"' | sed 's/version = "\([^"]*\)"/\1/')
+
+if [ "$CURRENT_PYTHON_CARGO_VERSION" != "unknown" ]; then
+    print_info "Current Python Cargo version: $CURRENT_PYTHON_CARGO_VERSION"
+    sed -i.bak "s/version = \"$CURRENT_PYTHON_CARGO_VERSION\"/version = \"$NEW_VERSION\"/" "$PYTHON_CARGO_FILE"
+    print_info "✓ Updated $PYTHON_CARGO_FILE"
+else
+    print_warn "Could not detect current Python Cargo version"
+fi
+
+# Update Python __init__.py
+print_info "Updating Python __init__.py..."
+PYTHON_INIT_FILE="$SCRIPT_DIR/python/src/snapbase/__init__.py"
+CURRENT_INIT_VERSION=$(get_current_version "$PYTHON_INIT_FILE" '__version__ = "[^"]*"' | sed 's/__version__ = "\([^"]*\)"/\1/')
+
+if [ "$CURRENT_INIT_VERSION" != "unknown" ]; then
+    print_info "Current __init__.py version: $CURRENT_INIT_VERSION"
+    sed -i.bak "s/__version__ = \"$CURRENT_INIT_VERSION\"/__version__ = \"$NEW_VERSION\"/" "$PYTHON_INIT_FILE"
+    print_info "✓ Updated $PYTHON_INIT_FILE"
+else
+    print_warn "Could not detect current __init__.py version"
+fi
+
+# Update GitHub Actions workflow
+print_info "Updating GitHub Actions workflow..."
+WORKFLOW_FILE="$SCRIPT_DIR/.github/workflows/release.yml"
+if [ -f "$WORKFLOW_FILE" ]; then
+    # Update multiple occurrences of version in the workflow file
+    sed -i.bak "s/snapbase-java-[0-9]\+\.[0-9]\+\.[0-9]\+-/snapbase-java-$NEW_VERSION-/g" "$WORKFLOW_FILE"
+    print_info "✓ Updated $WORKFLOW_FILE"
+else
+    print_warn "GitHub Actions workflow file not found"
+fi
+
 # Clean up backup files
 print_info "Cleaning up backup files..."
 find "$SCRIPT_DIR" -name "*.bak" -delete
@@ -108,7 +168,13 @@ print_info ""
 print_info "Summary of changes:"
 print_info "  Rust workspace: $CURRENT_RUST_VERSION → $NEW_VERSION"
 print_info "  Java Maven: $CURRENT_JAVA_VERSION → $NEW_VERSION"
-print_info "  Python: $CURRENT_PYTHON_VERSION → $NEW_VERSION"
+if [ -f "$JAVA_DEP_FILE" ]; then
+    print_info "  Java dependency-reduced: $CURRENT_JAVA_DEP_VERSION → $NEW_VERSION"
+fi
+print_info "  Python project: $CURRENT_PYTHON_VERSION → $NEW_VERSION"
+print_info "  Python Cargo: $CURRENT_PYTHON_CARGO_VERSION → $NEW_VERSION"
+print_info "  Python module: $CURRENT_INIT_VERSION → $NEW_VERSION"
+print_info "  GitHub Actions: Updated JAR references"
 print_info ""
 print_info "Next steps:"
 print_info "  1. Review the changes: git diff"

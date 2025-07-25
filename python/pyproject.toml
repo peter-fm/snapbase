@@ -1,6 +1,6 @@
 [project]
 name = "snapbase"
-version = "0.1.0"
+version = "0.1.1"
 description = "A snapshot-based structured data diff tool"
 readme = "README.md"
 authors = [
