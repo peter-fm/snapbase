@@ -3,10 +3,7 @@
 use crate::cli::Commands;
 use crate::output::{PrettyPrinter, JsonFormatter};
 use crate::progress::ProgressReporter;
-use std::collections::HashMap;
-
 use snapbase_core::query::{QueryResult, QueryValue};
-use snapbase_core::data::DataProcessor;
 use snapbase_core::error::{Result, SnapbaseError};
 use snapbase_core::resolver::{SnapshotRef, SnapshotResolver};
 use snapbase_core::workspace::SnapbaseWorkspace;
@@ -16,25 +13,11 @@ use snapbase_core::config::{get_snapshot_config, get_database_config};
 use snapbase_core::database::{discover_database_tables, create_table_snapshot_sql, TableInfo};
 use snapbase_core::config;
 use snapbase_core::snapshot;
-use snapbase_core::hash;
 use snapbase_core::path_utils;
 use snapbase_core::sql;
 use snapbase_core::export::{UnifiedExporter, ExportOptions, ExportFormat};
 use std::path::Path;
 
-/// Filter row data to include only original columns (exclude snapbase metadata columns)
-/// This ensures consistent hashing by excluding columns like __snapbase_*, snapshot_name, snapshot_timestamp
-fn filter_original_columns(row_data: &[String], original_column_count: usize) -> Vec<String> {
-    // Take only the first N columns (original data), excluding metadata columns added by snapbase
-    row_data.iter().take(original_column_count).cloned().collect()
-}
-
-/// Filter changed row data HashMap to include only original columns
-fn filter_changed_row_data(full_data: &HashMap<u64, Vec<String>>, original_column_count: usize) -> HashMap<u64, Vec<String>> {
-    full_data.iter().map(|(row_index, row_data)| {
-        (*row_index, filter_original_columns(row_data, original_column_count))
-    }).collect()
-}
 
 /// Execute a command
 pub fn execute_command(command: Commands, workspace_path: Option<&Path>) -> Result<()> {
@@ -579,281 +562,6 @@ fn show_command(
     Ok(())
 }
 
-/// Memory-efficient streaming status command
-fn streaming_status_command(
-    workspace_path: Option<&Path>,
-    input: &str,
-    compare_to: Option<&str>,
-    quiet: bool,
-    json: bool,
-) -> Result<()> {
-    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
-    let resolver = SnapshotResolver::new(workspace.clone());
-
-    // Canonicalize input path for comparison
-    let input_path = if Path::new(input).is_absolute() {
-        Path::new(input).to_path_buf()
-    } else {
-        workspace.root.join(input)
-    };
-    let canonical_input_path = input_path.canonicalize()
-        .unwrap_or(input_path.clone())
-        .to_string_lossy()
-        .to_string();
-
-    // Resolve comparison snapshot
-    let comparison_snapshot = if let Some(name) = compare_to {
-        let snap_ref = SnapshotRef::from_string(name.to_string());
-        resolver.resolve(&snap_ref)?
-    } else {
-        // Find latest snapshot for this specific source
-        let latest_for_source = workspace.latest_snapshot_for_source(&canonical_input_path)?;
-        if let Some(latest_name) = latest_for_source {
-            let snap_ref = SnapshotRef::from_string(latest_name);
-            resolver.resolve(&snap_ref)?
-        } else {
-            return Err(SnapbaseError::workspace("No snapshots found to compare against"));
-        }
-    };
-
-    if !json {
-        println!("📊 Streaming comparison of '{}' against snapshot '{}'...", input, comparison_snapshot.name);
-    }
-
-    // Load baseline snapshot metadata
-    let rt = tokio::runtime::Runtime::new()?;
-    let baseline_metadata = if let Some(preloaded) = comparison_snapshot.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &comparison_snapshot.json_path {
-        let metadata_data = rt.block_on(async {
-            workspace.storage().read_file(json_path).await
-        })?;
-        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
-    } else {
-        return Err(SnapbaseError::SnapshotNotFound {
-            name: comparison_snapshot.name.clone(),
-        });
-    };
-
-    // Get baseline data path
-    let baseline_data_path = comparison_snapshot.data_path.as_ref().ok_or_else(|| {
-        SnapbaseError::archive("Baseline snapshot has no data path")
-    })?;
-
-    // Load current data info
-    let mut current_data_processor = DataProcessor::new_with_workspace(&workspace)?;
-    let current_data_info = current_data_processor.load_file(&input_path)?;
-
-    if !json {
-        println!("🔍 Phase 1: Building hash sets for efficient comparison...");
-    }
-
-    // Phase 1: Stream both datasets and build hash sets
-    let rt = tokio::runtime::Runtime::new()?;
-    let (baseline_hashes, current_hashes) = rt.block_on(async {
-        // Stream baseline data
-        let mut baseline_processor = DataProcessor::new_with_workspace(&workspace)?;
-        let baseline_rows = baseline_processor.load_cloud_storage_data(baseline_data_path, &workspace).await?;
-        let baseline_stream_data: Vec<(u64, Vec<String>)> = baseline_rows
-            .into_iter()
-            .enumerate()
-            .map(|(i, row)| (i as u64, row))
-            .collect();
-
-        // Stream current data  
-        let current_rows = current_data_processor.stream_rows_async(None::<fn(u64, u64, &str)>).await?;
-
-        // Build hash sets
-        let mut baseline_hashes = snapbase_core::change_detection::RowHashSet::new();
-        let mut current_hashes = snapbase_core::change_detection::RowHashSet::new();
-
-        // Get original columns (exclude snapbase metadata) for consistent hashing
-        let original_column_count = baseline_metadata.columns.len();
-        
-        // Build baseline hashes (only original columns, exclude metadata)
-        for (index, row) in baseline_stream_data {
-            let original_row_data = filter_original_columns(&row, original_column_count);
-            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
-            baseline_hashes.add_row(index, hash);
-        }
-
-        // Build current hashes (only original columns, exclude metadata)
-        for (index, row) in current_rows {
-            let original_row_data = filter_original_columns(&row, original_column_count);
-            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
-            current_hashes.add_row(index, hash);
-        }
-
-        Ok::<_, SnapbaseError>((baseline_hashes, current_hashes))
-    })?;
-
-    if !json {
-        println!("🔍 Phase 2: Identifying changed rows...");
-    }
-
-    // Phase 2: Compare hash sets to identify changed rows
-    let changed_rows = StreamingChangeDetector::identify_changed_rows(&baseline_hashes, &current_hashes);
-
-    // Calculate actual number of logical changes (not double-counting modified rows)
-    let unique_changed_rows: std::collections::HashSet<u64> = changed_rows.baseline_changed.iter()
-        .chain(changed_rows.current_changed.iter())
-        .cloned()
-        .collect();
-    let changed_count = unique_changed_rows.len();
-    
-    if !json {
-        println!("📈 Found {} unchanged rows, {} changed rows", changed_rows.unchanged_count, changed_count);
-        
-        if changed_count > 0 {
-            println!("🔍 Phase 3: Analyzing {changed_count} changed rows in detail...");
-        }
-    }
-
-    // Get original columns (exclude snapbase metadata) for consistent analysis
-    let original_column_count = baseline_metadata.columns.len();
-    
-    // Phase 3: Load and analyze only the changed rows if there are any changes
-    let changes = if changed_count > 0 {
-        rt.block_on(async {
-            // Load baseline changed rows
-            let baseline_changed_data_full = if !changed_rows.baseline_changed.is_empty() {
-                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
-                processor.load_specific_rows_from_storage(baseline_data_path, &workspace, &changed_rows.baseline_changed).await?
-            } else {
-                HashMap::new()
-            };
-
-            // Load current changed rows
-            let current_changed_data_full = if !changed_rows.current_changed.is_empty() {
-                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
-                let _data_info = processor.load_file(&input_path)?;
-                processor.load_specific_rows(&changed_rows.current_changed).await?
-            } else {
-                HashMap::new()
-            };
-            
-            // Filter to original columns only (exclude metadata) for analysis
-            let baseline_changed_data = filter_changed_row_data(&baseline_changed_data_full, original_column_count);
-            let current_changed_data = filter_changed_row_data(&current_changed_data_full, original_column_count);
-
-            StreamingChangeDetector::analyze_changed_rows(
-                &changed_rows,
-                &baseline_metadata.columns,
-                &current_data_info.columns,
-                baseline_changed_data,
-                current_changed_data,
-            ).await
-        })?
-    } else {
-        // No changes detected, create empty result
-        snapbase_core::change_detection::ChangeDetectionResult {
-            schema_changes: snapbase_core::change_detection::SchemaChanges {
-                column_order: None,
-                columns_added: Vec::new(),
-                columns_removed: Vec::new(),
-                columns_renamed: Vec::new(),
-                type_changes: Vec::new(),
-            },
-            row_changes: snapbase_core::change_detection::RowChanges {
-                modified: Vec::new(),
-                added: Vec::new(),
-                removed: Vec::new(),
-            },
-        }
-    };
-
-    // Output results
-    if json {
-        let status_json = JsonFormatter::format_comprehensive_status_results(&changes)?;
-        println!("{status_json}");
-    } else {
-        PrettyPrinter::print_comprehensive_status_results(&changes, quiet);
-        if !quiet {
-            println!("✅ Memory-efficient streaming comparison completed!");
-            println!("   Processed {} baseline rows, {} current rows", baseline_hashes.len(), current_hashes.len());
-            println!("   Memory usage optimized - only loaded {changed_count} changed rows");
-        }
-    }
-
-    Ok(())
-}
-
-/// Check status against a snapshot (original implementation - kept for fallback)
-fn status_command(
-    workspace_path: Option<&Path>,
-    input: &str,
-    compare_to: Option<&str>,
-    quiet: bool,
-    json: bool,
-) -> Result<()> {
-    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
-    let resolver = SnapshotResolver::new(workspace.clone());
-
-    // Canonicalize input path for comparison
-    let input_path = if Path::new(input).is_absolute() {
-        Path::new(input).to_path_buf()
-    } else {
-        workspace.root.join(input)
-    };
-    let canonical_input_path = input_path.canonicalize()
-        .unwrap_or(input_path.clone())
-        .to_string_lossy()
-        .to_string();
-
-    // Resolve comparison snapshot
-    let comparison_snapshot = if let Some(name) = compare_to {
-        let snap_ref = SnapshotRef::from_string(name.to_string());
-        resolver.resolve(&snap_ref)?
-    } else {
-        // Find latest snapshot for this specific source
-        let latest_for_source = workspace.latest_snapshot_for_source(&canonical_input_path)?;
-        if let Some(latest_name) = latest_for_source {
-            let snap_ref = SnapshotRef::from_string(latest_name);
-            resolver.resolve(&snap_ref)?
-        } else {
-            return Err(SnapbaseError::workspace("No snapshots found to compare against"));
-        }
-    };
-
-    if !json {
-        println!("📊 Checking status of '{}' against snapshot '{}'...", input, comparison_snapshot.name);
-    }
-
-    // Load baseline snapshot metadata from Hive storage
-    let baseline_metadata = if let Some(preloaded) = comparison_snapshot.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &comparison_snapshot.json_path {
-        // Load from storage backend (works for both local and cloud)
-        let rt = tokio::runtime::Runtime::new()?;
-        let metadata_data = rt.block_on(async {
-            workspace.storage().read_file(json_path).await
-        })?;
-        serde_json::from_slice::<snapshot::SnapshotMetadata>(&metadata_data)?
-    } else {
-        return Err(SnapbaseError::SnapshotNotFound {
-            name: comparison_snapshot.name.clone(),
-        });
-    };
-
-    
-    // Load baseline snapshot data from Hive storage
-    let data_path = comparison_snapshot.data_path.as_ref().ok_or_else(|| {
-        SnapbaseError::archive("Baseline snapshot has no data path")
-    })?;
-
-
-    let rt = tokio::runtime::Runtime::new()?;
-    let mut data_processor = DataProcessor::new_with_workspace(&workspace)?;
-
-    let baseline_row_data = rt.block_on(async {
-        data_processor.load_cloud_storage_data(data_path, &workspace).await
-    })?;
-
-    // TODO: Replace with streaming-based change detection
-    // extract_all_data removed - will implement on-demand comparison using SQL JOINs
-    return Err(SnapbaseError::archive("Status command temporarily disabled during refactor to streaming model"));
-}
-
 /// List all snapshots
 fn list_command(workspace_path: Option<&Path>, source_filter: Option<&str>, json: bool) -> Result<()> {
     let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
@@ -1255,7 +963,7 @@ fn create_hive_snapshot(
     let data_info = processor.load_file(input_path)?;
     
     // Create progress reporter for the snapshot operation
-    let mut progress_reporter = ProgressReporter::new_for_snapshot(data_info.row_count);
+    let mut progress_reporter = ProgressReporter::new_for_snapshot();
     
     // Show progress for large datasets
     println!("📊 Found {} rows, {} columns", data_info.row_count, data_info.column_count());
@@ -1266,14 +974,6 @@ fn create_hive_snapshot(
     
     // Finish schema analysis phase
     progress_reporter.finish_schema(&format!("Schema analyzed: {} columns", data_info.column_count()));
-    
-    // Load baseline data from previous snapshot for change detection
-    // Use the canonical path for lookup, but the source name for directory structure
-    let canonical_input_path = input_path.canonicalize()
-        .unwrap_or_else(|_| input_path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-    // Simplified: no baseline data needed for pure streaming approach
 
     // Create Parquet file using DuckDB COPY - get storage backend path
     let parquet_relative_path = format!("{hive_path_str}/data.parquet");
@@ -1568,170 +1268,6 @@ fn show_snapshot_config(config: &config::SnapshotConfig) {
     println!("  Default name pattern: {}", config.default_name_pattern);
 }
 
-/// Load baseline data from the latest snapshot for change detection
-fn load_baseline_data_for_cli(
-    workspace: &SnapbaseWorkspace,
-    canonical_source_path: &str,
-    source_name: &str,
-) -> Result<()> {
-    // Find the latest snapshot for this source
-    let latest_snapshot = workspace.latest_snapshot_for_source(canonical_source_path)?;
-
-    if let Some(snapshot_name) = latest_snapshot {
-        // Load the snapshot data
-        let rt = tokio::runtime::Runtime::new()?;
-        
-        // Find the snapshot directory
-        let sources_dir = "sources";
-        let snapshot_dir = format!("{sources_dir}/{source_name}/snapshot_name={snapshot_name}");
-        
-        // List all timestamp directories to find the latest
-        let timestamp_dirs = rt.block_on(async {
-            workspace.storage().list_directories(&snapshot_dir).await
-        })?;
-        
-        // Find the latest timestamp directory
-        let mut latest_timestamp = None;
-        for dir in timestamp_dirs {
-            if let Some(stripped) = dir.strip_prefix("snapshot_timestamp=") {
-                let timestamp = stripped.to_string(); // Remove "snapshot_timestamp=" prefix
-                if latest_timestamp.is_none() || Some(&timestamp) > latest_timestamp.as_ref() {
-                    latest_timestamp = Some(timestamp);
-                }
-            }
-        }
-        
-        if let Some(timestamp) = latest_timestamp {
-            let full_snapshot_path = format!("{snapshot_dir}/snapshot_timestamp={timestamp}");
-            let metadata_path = format!("{full_snapshot_path}/metadata.json");
-            let parquet_path = format!("{full_snapshot_path}/data.parquet");
-            
-            // Load metadata to get schema
-            let metadata_data = rt.block_on(async {
-                workspace.storage().read_file(&metadata_path).await
-            })?;
-            
-            let metadata: serde_json::Value = serde_json::from_slice(&metadata_data)?;
-            
-            // Extract column information
-            let columns = metadata["columns"].as_array()
-                .ok_or_else(|| SnapbaseError::invalid_input("Missing columns in metadata"))?;
-            
-            let mut schema = Vec::new();
-            for col in columns {
-                schema.push(hash::ColumnInfo {
-                    name: col["name"].as_str().unwrap_or("unknown").to_string(),
-                    data_type: col["data_type"].as_str().unwrap_or("TEXT").to_string(),
-                    nullable: col["nullable"].as_bool().unwrap_or(true),
-                });
-            }
-            
-            // Load parquet data using DuckDB
-            let data = load_parquet_data_from_storage(workspace, &parquet_path, &schema)?;
-            
-            return Ok(()); // BaselineData removed
-        }
-    }
-    
-    Ok(())
-}
-
-/// Load parquet data from storage backend
-fn load_parquet_data_from_storage(
-    workspace: &SnapbaseWorkspace,
-    parquet_path: &str,
-    schema: &[hash::ColumnInfo],
-) -> Result<Vec<Vec<String>>> {
-    let data_processor = snapbase_core::data::DataProcessor::new_with_workspace(workspace)?;
-    
-    // Get the DuckDB path for the parquet file
-    let duckdb_path = workspace.storage().get_duckdb_path(parquet_path);
-    
-    // Load the parquet file using DuckDB
-    let column_names: Vec<String> = schema.iter().map(|c| c.name.clone()).collect();
-    let load_sql = format!(
-        "SELECT {} FROM read_parquet('{}')",
-        column_names.join(", "),
-        duckdb_path
-    );
-    
-    let mut stmt = data_processor.connection.prepare(&load_sql)?;
-    let rows = stmt.query_map([], |row| {
-        let mut string_row = Vec::new();
-        for i in 0..schema.len() {
-            let value: String = match row.get_ref(i)? {
-                duckdb::types::ValueRef::Null => String::new(),
-                duckdb::types::ValueRef::Boolean(b) => if b { "true".to_string() } else { "false".to_string() },
-                duckdb::types::ValueRef::TinyInt(i) => i.to_string(),
-                duckdb::types::ValueRef::SmallInt(i) => i.to_string(),
-                duckdb::types::ValueRef::Int(i) => i.to_string(),
-                duckdb::types::ValueRef::BigInt(i) => i.to_string(),
-                duckdb::types::ValueRef::HugeInt(i) => i.to_string(),
-                duckdb::types::ValueRef::UTinyInt(i) => i.to_string(),
-                duckdb::types::ValueRef::USmallInt(i) => i.to_string(),
-                duckdb::types::ValueRef::UInt(i) => i.to_string(),
-                duckdb::types::ValueRef::UBigInt(i) => i.to_string(),
-                duckdb::types::ValueRef::Float(f) => f.to_string(),
-                duckdb::types::ValueRef::Double(f) => f.to_string(),
-                duckdb::types::ValueRef::Decimal(d) => d.to_string(),
-                duckdb::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned(),
-                duckdb::types::ValueRef::Blob(b) => format!("<blob:{} bytes>", b.len()),
-                duckdb::types::ValueRef::Date32(d) => {
-                    // Convert days since epoch to proper date format
-                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-                    let date = epoch + chrono::Duration::days(d as i64);
-                    date.format("%Y-%m-%d").to_string()
-                },
-                duckdb::types::ValueRef::Time64(unit, t) => {
-                    // Convert microseconds since midnight to HH:MM:SS format
-                    match unit {
-                        duckdb::types::TimeUnit::Microsecond => {
-                            let total_seconds = t / 1_000_000;
-                            let hours = total_seconds / 3600;
-                            let minutes = (total_seconds % 3600) / 60;
-                            let seconds = total_seconds % 60;
-                            let microseconds = t % 1_000_000;
-                            if microseconds > 0 {
-                                format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
-                            } else {
-                                format!("{hours:02}:{minutes:02}:{seconds:02}")
-                            }
-                        }
-                        _ => format!("{t:?}"), // Fallback for other time units
-                    }
-                },
-                duckdb::types::ValueRef::Timestamp(unit, ts) => {
-                    // Convert microseconds since Unix epoch to YYYY-MM-DD HH:MM:SS format
-                    match unit {
-                        duckdb::types::TimeUnit::Microsecond => {
-                            let seconds = ts / 1_000_000;
-                            let microseconds = ts % 1_000_000;
-                            let datetime = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32)
-                                .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
-                            if microseconds > 0 {
-                                datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
-                            } else {
-                                datetime.format("%Y-%m-%d %H:%M:%S").to_string()
-                            }
-                        }
-                        _ => format!("{ts:?}"), // Fallback for other time units
-                    }
-                },
-                _ => "<unknown>".to_string(),
-            };
-            string_row.push(value);
-        }
-        Ok(string_row)
-    })?;
-    
-    let mut data = Vec::new();
-    for row_result in rows {
-        data.push(row_result?);
-    }
-    
-    Ok(data)
-}
-
 /// Show workspace statistics
 fn stats_command(workspace_path: Option<&Path>, json: bool) -> Result<()> {
     let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
@@ -1761,285 +1297,6 @@ fn stats_command(workspace_path: Option<&Path>, json: bool) -> Result<()> {
     }
     
     Ok(())
-}
-
-/// Memory-efficient streaming diff command
-fn streaming_diff_command(
-    workspace_path: Option<&Path>,
-    source: &str,
-    from_snapshot: &str,
-    to_snapshot: &str,
-    json: bool,
-) -> Result<()> {
-    let workspace = SnapbaseWorkspace::find_or_create(workspace_path)?;
-    let resolver = SnapshotResolver::new(workspace.clone());
-    
-    // Resolve both snapshots
-    let from_resolved = resolver.resolve_by_name_for_source(from_snapshot, Some(source))?;
-    let to_resolved = resolver.resolve_by_name_for_source(to_snapshot, Some(source))?;
-    
-    if !json {
-        println!("🔍 Streaming comparison of snapshots '{from_snapshot}' → '{to_snapshot}'");
-    }
-    
-    // Load metadata for both snapshots
-    let rt = tokio::runtime::Runtime::new()?;
-    
-    let from_metadata = if let Some(preloaded) = from_resolved.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &from_resolved.json_path {
-        let metadata_data = rt.block_on(async {
-            workspace.storage().read_file(json_path).await
-        })?;
-        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
-    } else {
-        return Err(SnapbaseError::SnapshotNotFound {
-            name: from_snapshot.to_string(),
-        });
-    };
-    
-    let to_metadata = if let Some(preloaded) = to_resolved.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &to_resolved.json_path {
-        let metadata_data = rt.block_on(async {
-            workspace.storage().read_file(json_path).await
-        })?;
-        serde_json::from_slice::<snapbase_core::snapshot::SnapshotMetadata>(&metadata_data)?
-    } else {
-        return Err(SnapbaseError::SnapshotNotFound {
-            name: to_snapshot.to_string(),
-        });
-    };
-    
-    // Get data paths
-    let from_data_path = from_resolved.data_path.as_ref().ok_or_else(|| {
-        SnapbaseError::archive("From snapshot has no data path")
-    })?;
-
-    let to_data_path = to_resolved.data_path.as_ref().ok_or_else(|| {
-        SnapbaseError::archive("To snapshot has no data path")  
-    })?;
-
-    if !json {
-        println!("🔍 Phase 1: Building hash sets for efficient comparison...");
-    }
-
-    // Phase 1: Stream both datasets and build hash sets
-    let (from_hashes, to_hashes) = rt.block_on(async {
-        // Stream from snapshot data
-        let mut from_processor = DataProcessor::new_with_workspace(&workspace)?;
-        let from_rows = from_processor.load_cloud_storage_data(from_data_path, &workspace).await?;
-        let from_stream_data: Vec<(u64, Vec<String>)> = from_rows
-            .into_iter()
-            .enumerate()
-            .map(|(i, row)| (i as u64, row))
-            .collect();
-
-        // Stream to snapshot data
-        let mut to_processor = DataProcessor::new_with_workspace(&workspace)?;
-        let to_rows = to_processor.load_cloud_storage_data(to_data_path, &workspace).await?;
-        let to_stream_data: Vec<(u64, Vec<String>)> = to_rows
-            .into_iter()
-            .enumerate()
-            .map(|(i, row)| (i as u64, row))
-            .collect();
-
-        // Build hash sets
-        let mut from_hashes = snapbase_core::change_detection::RowHashSet::new();
-        let mut to_hashes = snapbase_core::change_detection::RowHashSet::new();
-
-        // Get original columns (exclude snapbase metadata) for consistent hashing
-        let original_column_count = from_metadata.columns.len();
-        
-        // Build from snapshot hashes (only original columns, exclude metadata)
-        for (index, row) in from_stream_data {
-            let original_row_data = filter_original_columns(&row, original_column_count);
-            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
-            from_hashes.add_row(index, hash);
-        }
-
-        // Build to snapshot hashes (only original columns, exclude metadata)
-        for (index, row) in to_stream_data {
-            let original_row_data = filter_original_columns(&row, original_column_count);
-            let hash = StreamingChangeDetector::compute_row_hash(&original_row_data);
-            to_hashes.add_row(index, hash);
-        }
-
-        Ok::<_, SnapbaseError>((from_hashes, to_hashes))
-    })?;
-
-    if !json {
-        println!("🔍 Phase 2: Identifying changed rows...");
-    }
-
-    // Phase 2: Compare hash sets to identify changed rows
-    let changed_rows = StreamingChangeDetector::identify_changed_rows(&from_hashes, &to_hashes);
-    // Calculate actual number of logical changes (not double-counting modified rows)
-    let unique_changed_rows: std::collections::HashSet<u64> = changed_rows.baseline_changed.iter()
-        .chain(changed_rows.current_changed.iter())
-        .cloned()
-        .collect();
-    let changed_count = unique_changed_rows.len();
-    
-    if !json {
-        println!("📈 Found {} unchanged rows, {} changed rows", changed_rows.unchanged_count, changed_count);
-        
-        if changed_count > 0 {
-            println!("🔍 Phase 3: Analyzing {changed_count} changed rows in detail...");
-        }
-    }
-
-    // Get original columns (exclude snapbase metadata) for consistent analysis
-    let original_column_count = from_metadata.columns.len();
-    
-    // Phase 3: Load and analyze only the changed rows if there are any changes
-    let changes = if changed_count > 0 {
-        rt.block_on(async {
-            // Load from snapshot changed rows
-            let from_changed_data_full = if !changed_rows.baseline_changed.is_empty() {
-                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
-                processor.load_specific_rows_from_storage(from_data_path, &workspace, &changed_rows.baseline_changed).await?
-            } else {
-                HashMap::new()
-            };
-
-            // Load to snapshot changed rows
-            let to_changed_data_full = if !changed_rows.current_changed.is_empty() {
-                let mut processor = DataProcessor::new_with_workspace(&workspace)?;
-                processor.load_specific_rows_from_storage(to_data_path, &workspace, &changed_rows.current_changed).await?
-            } else {
-                HashMap::new()
-            };
-            
-            // Filter to original columns only (exclude metadata) for analysis
-            let from_changed_data = filter_changed_row_data(&from_changed_data_full, original_column_count);
-            let to_changed_data = filter_changed_row_data(&to_changed_data_full, original_column_count);
-
-            StreamingChangeDetector::analyze_changed_rows(
-                &changed_rows,
-                &from_metadata.columns,
-                &to_metadata.columns,
-                from_changed_data,
-                to_changed_data,
-            ).await
-        })?
-    } else {
-        // No changes detected, create empty result
-        snapbase_core::change_detection::ChangeDetectionResult {
-            schema_changes: snapbase_core::change_detection::SchemaChanges {
-                column_order: None,
-                columns_added: Vec::new(),
-                columns_removed: Vec::new(),
-                columns_renamed: Vec::new(),
-                type_changes: Vec::new(),
-            },
-            row_changes: snapbase_core::change_detection::RowChanges {
-                modified: Vec::new(),
-                added: Vec::new(),
-                removed: Vec::new(),
-            },
-        }
-    };
-    
-    // Output results
-    if json {
-        let diff_json = serde_json::to_value(&changes)?;
-        println!("{}", serde_json::to_string_pretty(&diff_json)?);
-    } else {
-        // Use the same comprehensive output as status command
-        PrettyPrinter::print_comprehensive_diff_results(&changes, from_snapshot, to_snapshot);
-        println!("✅ Memory-efficient streaming diff completed!");
-        println!("   Processed {} baseline rows, {} comparison rows", from_hashes.len(), to_hashes.len());
-        println!("   Memory usage optimized - only loaded {changed_count} changed rows");
-    }
-    
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-    
-    // Import test fixtures
-    use snapbase_core::test_fixtures::*;
-
-    #[test]
-    fn test_init_command() {
-        let workspace = TestWorkspace::new("local.toml");
-        let _guard = workspace.change_to_workspace();
-        
-        // Test successful initialization
-        let result = init_command(Some(workspace.path()), false);
-        assert!(result.is_ok(), "Failed to initialize workspace");
-        
-        // Test initialization of already initialized workspace
-        let result = init_command(Some(workspace.path()), false);
-        assert!(result.is_ok(), "Should handle already initialized workspace");
-        
-        // Verify workspace directory was created
-        let workspace_created = workspace.path().join("snapbase_storage").exists() || 
-                               workspace.path().join(".snapbase").exists();
-        assert!(workspace_created, "Workspace directory not created");
-    }
-
-    #[test]
-    fn test_snapshot_command_basic() {
-        let workspace = TestWorkspace::new("local.toml");
-        let data_file = workspace.copy_data_file("simple.csv", "test.csv");
-        let _guard = workspace.change_to_workspace();
-        
-        // Initialize workspace
-        init_command(Some(workspace.path()), false).unwrap();
-        
-        // Verify workspace was created correctly
-        let _ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
-        let workspace_created = workspace.path().join("snapbase_storage").exists() || 
-                               workspace.path().join(".snapbase").exists();
-        assert!(workspace_created, "Workspace directory not created");
-        assert!(data_file.exists(), "Data file not created");
-        
-        // Test actual snapshot creation
-        let result = snapshot_command(
-            Some(workspace.path()),
-            &data_file.to_string_lossy(),
-            Some("test_snapshot")
-        );
-        
-        match result {
-            Ok(_) => println!("✅ Snapshot creation successful"),
-            Err(e) => {
-                println!("⚠️  Snapshot creation failed: {e}");
-                // Still verify workspace is functional
-                assert!(workspace_created, "Workspace directory not created");
-            }
-        }
-    }
-
-
-    #[test]
-    fn test_validate_file_within_workspace() {
-        let workspace = TestWorkspace::new("local.toml");
-        let _guard = workspace.change_to_workspace();
-        
-        // Initialize workspace
-        init_command(Some(workspace.path()), false).unwrap();
-        let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
-        
-        // Test file within workspace
-        let valid_file = workspace.path().join("test.csv");
-        fs::write(&valid_file, "data").unwrap();
-        let result = validate_file_within_workspace(&valid_file, &ws);
-        assert!(result.is_ok(), "Should accept file within workspace");
-        
-        // Test file outside workspace
-        let outside_temp = TempDir::new().unwrap();
-        let invalid_file = outside_temp.path().join("test.csv");
-        fs::write(&invalid_file, "data").unwrap();
-        let result = validate_file_within_workspace(&invalid_file, &ws);
-        assert!(result.is_err(), "Should reject file outside workspace");
-    }
 }
 
 /// Thin wrapper status command using the new core API
@@ -2122,7 +1379,7 @@ fn thin_wrapper_status_command(
 /// Thin wrapper diff command using the new core API
 fn thin_wrapper_diff_command(
     workspace_path: Option<&Path>,
-    source: &str,
+    _source: &str,
     from: &str,
     to: &str,
     json: bool,
@@ -2181,4 +1438,93 @@ fn thin_wrapper_diff_command(
     }
 
     Ok(())
+}
+
+
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+    
+    // Import test fixtures
+    use snapbase_core::test_fixtures::*;
+
+    #[test]
+    fn test_init_command() {
+        let workspace = TestWorkspace::new("local.toml");
+        let _guard = workspace.change_to_workspace();
+        
+        // Test successful initialization
+        let result = init_command(Some(workspace.path()), false);
+        assert!(result.is_ok(), "Failed to initialize workspace");
+        
+        // Test initialization of already initialized workspace
+        let result = init_command(Some(workspace.path()), false);
+        assert!(result.is_ok(), "Should handle already initialized workspace");
+        
+        // Verify workspace directory was created
+        let workspace_created = workspace.path().join("snapbase_storage").exists() || 
+                               workspace.path().join(".snapbase").exists();
+        assert!(workspace_created, "Workspace directory not created");
+    }
+
+    #[test]
+    fn test_snapshot_command_basic() {
+        let workspace = TestWorkspace::new("local.toml");
+        let data_file = workspace.copy_data_file("simple.csv", "test.csv");
+        let _guard = workspace.change_to_workspace();
+        
+        // Initialize workspace
+        init_command(Some(workspace.path()), false).unwrap();
+        
+        // Verify workspace was created correctly
+        let _ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
+        let workspace_created = workspace.path().join("snapbase_storage").exists() || 
+                               workspace.path().join(".snapbase").exists();
+        assert!(workspace_created, "Workspace directory not created");
+        assert!(data_file.exists(), "Data file not created");
+        
+        // Test actual snapshot creation
+        let result = snapshot_command(
+            Some(workspace.path()),
+            &data_file.to_string_lossy(),
+            Some("test_snapshot")
+        );
+        
+        match result {
+            Ok(_) => println!("✅ Snapshot creation successful"),
+            Err(e) => {
+                println!("⚠️  Snapshot creation failed: {e}");
+                // Still verify workspace is functional
+                assert!(workspace_created, "Workspace directory not created");
+            }
+        }
+    }
+
+
+    #[test]
+    fn test_validate_file_within_workspace() {
+        let workspace = TestWorkspace::new("local.toml");
+        let _guard = workspace.change_to_workspace();
+        
+        // Initialize workspace
+        init_command(Some(workspace.path()), false).unwrap();
+        let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
+        
+        // Test file within workspace
+        let valid_file = workspace.path().join("test.csv");
+        fs::write(&valid_file, "data").unwrap();
+        let result = validate_file_within_workspace(&valid_file, &ws);
+        assert!(result.is_ok(), "Should accept file within workspace");
+        
+        // Test file outside workspace
+        let outside_temp = TempDir::new().unwrap();
+        let invalid_file = outside_temp.path().join("test.csv");
+        fs::write(&invalid_file, "data").unwrap();
+        let result = validate_file_within_workspace(&invalid_file, &ws);
+        assert!(result.is_err(), "Should reject file outside workspace");
+    }
 }

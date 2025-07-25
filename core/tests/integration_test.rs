@@ -1,7 +1,5 @@
 //! Integration tests for snapbase core workflow
 //! Tests the complete flow: init → snapshot → diff → query
-
-use snapbase_core::workspace::SnapbaseWorkspace;
 use snapbase_core::data::DataProcessor;
 
 mod common;
@@ -14,9 +12,6 @@ fn test_complete_workflow() {
     
     // Change to workspace directory
     let _guard = workspace.change_to_workspace();
-    
-    // Step 1: Initialize workspace
-    let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
     
     // Step 2: Verify workspace is properly initialized
     let workspace_created = workspace.path().join("snapbase_storage").exists() || 
@@ -50,8 +45,6 @@ fn test_snapshot_formats() {
     // Change to workspace directory
     let _guard = workspace.change_to_workspace();
     
-    // Initialize workspace
-    let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
     let mut data_processor = DataProcessor::new().unwrap();
     
     // Test CSV format
@@ -92,8 +85,6 @@ fn test_error_handling() {
     let workspace = TestWorkspace::new("local.toml");
     let _guard = workspace.change_to_workspace();
     
-    // Initialize workspace
-    let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
     let mut data_processor = DataProcessor::new().unwrap();
     
     // Test loading non-existent file

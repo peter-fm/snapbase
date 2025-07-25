@@ -13,7 +13,6 @@ use arrow::array::Array;
 use snapbase_core::{
     SnapbaseWorkspace, 
     Result as SnapbaseResult,
-    data::DataProcessor,
     change_detection::StreamingChangeDetector,
     resolver::SnapshotResolver,
     snapshot::SnapshotMetadata,
@@ -1016,64 +1015,6 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
         }
     };
     
-    // Load metadata for both snapshots
-    let from_metadata = if let Some(preloaded) = from_resolved.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &from_resolved.json_path {
-        let metadata_data = match rt.block_on(async {
-            workspace_handle.workspace.storage().read_file(json_path).await
-        }) {
-            Ok(data) => data,
-            Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to read from metadata: {}", e));
-                return std::ptr::null_mut();
-            }
-        };
-        match serde_json::from_slice::<SnapshotMetadata>(&metadata_data) {
-            Ok(metadata) => metadata,
-            Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to parse from metadata: {}", e));
-                return std::ptr::null_mut();
-            }
-        }
-    } else {
-        let _ = env.throw_new("com/snapbase/SnapbaseException", "From snapshot not found");
-        return std::ptr::null_mut();
-    };
-    
-    let to_metadata = if let Some(preloaded) = to_resolved.get_metadata() {
-        preloaded.clone()
-    } else if let Some(json_path) = &to_resolved.json_path {
-        let metadata_data = match rt.block_on(async {
-            workspace_handle.workspace.storage().read_file(json_path).await
-        }) {
-            Ok(data) => data,
-            Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to read to metadata: {}", e));
-                return std::ptr::null_mut();
-            }
-        };
-        match serde_json::from_slice::<SnapshotMetadata>(&metadata_data) {
-            Ok(metadata) => metadata,
-            Err(e) => {
-                let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to parse to metadata: {}", e));
-                return std::ptr::null_mut();
-            }
-        }
-    } else {
-        let _ = env.throw_new("com/snapbase/SnapbaseException", "To snapshot not found");
-        return std::ptr::null_mut();
-    };
-    
-    // Load data for both snapshots
-    let mut data_processor = match DataProcessor::new_with_workspace(&workspace_handle.workspace) {
-        Ok(processor) => processor,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to create data processor: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-    
     let from_data_path = match from_resolved.data_path.as_ref() {
         Some(path) => path,
         None => {
@@ -1086,26 +1027,6 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeDiff<'local>(
         Some(path) => path,
         None => {
             let _ = env.throw_new("com/snapbase/SnapbaseException", "To snapshot has no data path");
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let from_row_data = match rt.block_on(async {
-        data_processor.load_cloud_storage_data(&from_data_path, &workspace_handle.workspace).await
-    }) {
-        Ok(data) => data,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to load from data: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-    
-    let to_row_data = match rt.block_on(async {
-        data_processor.load_cloud_storage_data(&to_data_path, &workspace_handle.workspace).await
-    }) {
-        Ok(data) => data,
-        Err(e) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", format!("Failed to load to data: {}", e));
             return std::ptr::null_mut();
         }
     };

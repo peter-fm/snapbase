@@ -8,9 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-// Type alias for complex return types
-type ChangeResult = (Vec<(u64, u64)>, Vec<u64>, Vec<u64>);
-
 /// Memory-efficient streaming change detector
 pub struct StreamingChangeDetector;
 

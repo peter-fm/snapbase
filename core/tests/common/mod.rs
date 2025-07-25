@@ -1,5 +1,5 @@
 //! Common test utilities and fixtures
-
+#![allow(dead_code)]
 use std::path::{Path, PathBuf};
 use std::fs;
 use tempfile::TempDir;
@@ -36,7 +36,8 @@ impl TestFixtures {
 }
 
 /// Create a temporary test workspace with a config file
-pub struct TestWorkspace {
+
+pub struct TestWorkspace{
     pub temp_dir: TempDir,
     pub path: PathBuf,
     pub config_path: PathBuf,

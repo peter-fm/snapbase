@@ -1,7 +1,6 @@
 //! Output formatting utilities
 
 use snapbase_core::error::Result;
-use snapbase_core::hash::RowHashComparison;
 use snapbase_core::workspace::WorkspaceStats;
 use snapbase_core::change_detection::{ChangeDetectionResult, SchemaChanges, RowChanges};
 use serde_json::Value;
@@ -56,98 +55,6 @@ impl PrettyPrinter {
             }
         } else {
             println!("└─ Schema Hash: {}", metadata.get("schema_hash").unwrap_or(&Value::Null));
-        }
-    }
-
-    /// Print diff results
-    pub fn print_diff_results(diff: &Value) {
-        println!("🔍 Diff Results: {} → {}", 
-                 diff.get("base").unwrap_or(&Value::Null),
-                 diff.get("compare").unwrap_or(&Value::Null));
-        
-        let schema_changed = diff.get("schema_changed").and_then(|v| v.as_bool()).unwrap_or(false);
-        let rows_changed = diff.get("rows_changed").and_then(|v| v.as_u64()).unwrap_or(0);
-        
-        if schema_changed {
-            println!("├─ ❌ Schema: CHANGED");
-            if let Some(columns) = diff.get("columns_changed").and_then(|v| v.as_array()) {
-                println!("│  └─ Changed columns: {}", 
-                         columns.iter()
-                                .filter_map(|v| v.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", "));
-            }
-        } else {
-            println!("├─ ✅ Schema: unchanged");
-        }
-        
-        if rows_changed > 0 {
-            println!("├─ ❌ Rows: {rows_changed} changed");
-            if let Some(samples) = diff.get("sample_changes").and_then(|v| v.as_array()) {
-                let sample_str = samples.iter()
-                                       .filter_map(|v| v.as_u64())
-                                       .map(|n| n.to_string())
-                                       .collect::<Vec<_>>()
-                                       .join(", ");
-                println!("│  └─ Sample indices: {sample_str}");
-            }
-        } else {
-            println!("├─ ✅ Rows: unchanged");
-        }
-        
-        println!("└─ Total rows: {}", diff.get("row_count").unwrap_or(&Value::Null));
-    }
-
-    /// Print status check results
-    pub fn print_status_results(
-        schema_changed: bool,
-        columns_changed: &[String],
-        row_comparison: &RowHashComparison,
-        quiet: bool,
-    ) {
-        if quiet {
-            // Machine-readable output
-            println!("schema_changed={schema_changed}");
-            println!("columns_changed={}", columns_changed.len());
-            println!("rows_changed={}", row_comparison.total_changes());
-            return;
-        }
-
-        println!("📊 snapbase status");
-        
-        if schema_changed {
-            println!("├─ ❌ Schema: CHANGED");
-        } else {
-            println!("├─ ✅ Schema: unchanged");
-        }
-        
-        if columns_changed.is_empty() {
-            println!("├─ ✅ Columns: all matched");
-        } else {
-            println!("├─ ❌ Columns changed: {}", columns_changed.len());
-            println!("│  └─ {}", columns_changed.join(", "));
-        }
-        
-        if row_comparison.has_changes() {
-            println!("├─ ❌ Rows changed: {}", row_comparison.total_changes());
-            if !row_comparison.changed_rows.is_empty() {
-                let sample: Vec<String> = row_comparison.changed_rows
-                    .iter()
-                    .take(5)
-                    .map(|n| n.to_string())
-                    .collect();
-                println!("│  └─ Changed row indices (sample): {}", sample.join(", "));
-            }
-        } else {
-            println!("├─ ✅ Rows: unchanged");
-        }
-        
-        println!("└─ Total rows checked: {}", row_comparison.total_compare);
-        
-        if row_comparison.has_changes() || schema_changed || !columns_changed.is_empty() {
-            println!();
-            println!("🟡 You may want to run:");
-            println!("  snapbase snapshot <input> --name <new_version>");
         }
     }
 
@@ -302,10 +209,6 @@ impl PrettyPrinter {
 pub struct JsonFormatter;
 
 impl JsonFormatter {
-    /// Format any serializable data as JSON
-    pub fn format<T: serde::Serialize + ?Sized>(data: &T) -> Result<String> {
-        Ok(serde_json::to_string_pretty(data)?)
-    }
 
     /// Format workspace stats as JSON
     pub fn format_workspace_stats(stats: &WorkspaceStats) -> Result<String> {
@@ -315,27 +218,6 @@ impl JsonFormatter {
             "total_archive_size": stats.total_archive_size,
             "total_json_size": stats.total_json_size,
             "total_diff_size": stats.total_diff_size
-        });
-        Ok(serde_json::to_string_pretty(&json)?)
-    }
-
-    /// Format status results as JSON
-    pub fn format_status_results(
-        schema_changed: bool,
-        columns_changed: &[String],
-        row_comparison: &RowHashComparison,
-    ) -> Result<String> {
-        let json = serde_json::json!({
-            "schema_changed": schema_changed,
-            "columns_changed": columns_changed,
-            "rows_changed": row_comparison.total_changes(),
-            "row_details": {
-                "changed": row_comparison.changed_rows,
-                "added": row_comparison.added_rows,
-                "removed": row_comparison.removed_rows,
-                "total_base": row_comparison.total_base,
-                "total_compare": row_comparison.total_compare
-            }
         });
         Ok(serde_json::to_string_pretty(&json)?)
     }
@@ -379,11 +261,4 @@ mod tests {
         assert_eq!(format_bytes(1048576), "1.0 MB");
     }
 
-    #[test]
-    fn test_json_formatter() {
-        let data = serde_json::json!({"test": "value"});
-        let result = JsonFormatter::format(&data).unwrap();
-        assert!(result.contains("test"));
-        assert!(result.contains("value"));
-    }
 }

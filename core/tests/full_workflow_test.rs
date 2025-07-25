@@ -13,7 +13,7 @@ fn test_full_snapshot_workflow() {
     let _guard = workspace.change_to_workspace();
     
     // Initialize workspace
-    let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
+    let _ = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
     
     // Copy initial data
     let data_file = workspace.copy_data_file("employees.csv", "employees.csv");
@@ -62,7 +62,7 @@ fn test_change_detection_workflow() {
     let _guard = workspace.change_to_workspace();
     
     // Initialize workspace
-    let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
+    let _ = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
     let mut data_processor = DataProcessor::new().unwrap();
     
     // Test with different data formats
@@ -95,7 +95,7 @@ fn test_query_workflow() {
     let _guard = workspace.change_to_workspace();
     
     // Initialize workspace
-    let ws = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
+    let _ = SnapbaseWorkspace::find_or_create(Some(workspace.path())).unwrap();
     let mut data_processor = DataProcessor::new().unwrap();
     
     // Copy test data

@@ -10,7 +10,6 @@ use pyo3_arrow::PyRecordBatch;
 use snapbase_core::{
     SnapbaseWorkspace, 
     Result as SnapbaseResult,
-    data::DataProcessor,
     change_detection::StreamingChangeDetector,
     resolver::SnapshotResolver,
     snapshot::SnapshotMetadata,
