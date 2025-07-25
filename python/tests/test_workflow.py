@@ -48,10 +48,17 @@ class TestCompleteWorkflow:
         employees_file = temp_workspace / "employees.csv"
         employees_file.write_text(self.employees_baseline)
         
+        # Use unique snapshot names to avoid conflicts
+        import uuid
+        test_id = str(uuid.uuid4())[:8]
+        baseline_name = f"baseline_{test_id}"
+        snap1_name = f"snap1_{test_id}"
+        snap2_name = f"snap2_{test_id}"
+        
         # Create baseline snapshot (equivalent to: snapbase snapshot employees.csv --name baseline)
-        baseline_result = workspace.create_snapshot("employees.csv", "baseline")
+        baseline_result = workspace.create_snapshot("employees.csv", baseline_name)
         assert isinstance(baseline_result, str)
-        assert "baseline" in baseline_result
+        assert baseline_name in baseline_result
         
         # Update employees.csv with snapshot1 data
         employees_file.write_text(self.employees_snapshot1)
@@ -59,7 +66,7 @@ class TestCompleteWorkflow:
         # Check status (equivalent to: snapbase status employees.csv)
         # Note: Python API now has status method
         try:
-            changes = workspace.status("employees.csv", "baseline")
+            changes = workspace.status("employees.csv", baseline_name)
             assert isinstance(changes, str)
             # Should detect changes (Bob removed, Eve salary changed)
             changes_data = json.loads(changes)
@@ -69,30 +76,30 @@ class TestCompleteWorkflow:
             print(f"Status check not available: {e}")
         
         # Create snapshot1 (equivalent to: snapbase snapshot employees.csv --name snap1)
-        snap1_result = workspace.create_snapshot("employees.csv", "snap1")
+        snap1_result = workspace.create_snapshot("employees.csv", snap1_name)
         assert isinstance(snap1_result, str)
-        assert "snap1" in snap1_result
+        assert snap1_name in snap1_result
         
         # Update employees.csv with snapshot2 data
         employees_file.write_text(self.employees_snapshot2)
         
         # Check status again
         try:
-            changes2 = workspace.status("employees.csv", "snap1")
+            changes2 = workspace.status("employees.csv", snap1_name)
             assert isinstance(changes2, str)
             # Should detect changes (Bob added back, Diana removed, Eve salary reverted)
         except Exception as e:
             print(f"Second status check not available: {e}")
         
         # Create snapshot2 (equivalent to: snapbase snapshot employees.csv --name snap2)
-        snap2_result = workspace.create_snapshot("employees.csv", "snap2")
+        snap2_result = workspace.create_snapshot("employees.csv", snap2_name)
         assert isinstance(snap2_result, str)
-        assert "snap2" in snap2_result
+        assert snap2_name in snap2_result
         
         # Test export functionality (equivalent to: snapbase export employees.csv --file backup.csv --to snap2 --force)
         backup_file = temp_workspace / "backup.csv"
         try:
-            export_result = workspace.export("employees.csv", str(backup_file), "snap2", force=True)
+            export_result = workspace.export("employees.csv", str(backup_file), snap2_name, force=True)
             assert backup_file.exists()
             
             # Verify backup content matches snapshot2 data
@@ -131,7 +138,7 @@ class TestCompleteWorkflow:
         
         # Test filtered query (equivalent to: snapbase query employees.csv "select * from data where snapshot_name = 'snap2'")
         try:
-            filtered_query = workspace.query("employees.csv", "SELECT * FROM data WHERE snapshot_name = 'snap2'")
+            filtered_query = workspace.query("employees.csv", f"SELECT * FROM data WHERE snapshot_name = '{snap2_name}'")
             assert filtered_query is not None
             
         except Exception as e:
@@ -147,19 +154,26 @@ class TestCompleteWorkflow:
         workspace = Workspace(str(temp_workspace))
         workspace.init()
         
+        # Use unique snapshot names to avoid conflicts
+        import uuid
+        test_id = str(uuid.uuid4())[:8]
+        baseline_name = f"diff_baseline_{test_id}"
+        snap1_name = f"diff_snap1_{test_id}"
+        snap2_name = f"diff_snap2_{test_id}"
+        
         # Set up test data and snapshots
         employees_file = temp_workspace / "employees.csv" 
         employees_file.write_text(self.employees_baseline)
-        workspace.create_snapshot("employees.csv", "baseline")
+        workspace.create_snapshot("employees.csv", baseline_name)
         
         employees_file.write_text(self.employees_snapshot1)
-        workspace.create_snapshot("employees.csv", "snap1")
+        workspace.create_snapshot("employees.csv", snap1_name)
         
         employees_file.write_text(self.employees_snapshot2)
-        workspace.create_snapshot("employees.csv", "snap2")
+        workspace.create_snapshot("employees.csv", snap2_name)
         try:
             # Test diff between baseline and snap1 (equivalent to: snapbase diff employees.csv baseline snap1)
-            diff1_result = workspace.diff("employees.csv", "baseline", "snap1")
+            diff1_result = workspace.diff("employees.csv", baseline_name, snap1_name)
             assert isinstance(diff1_result, str)
             assert diff1_result  # Should not be empty
             
@@ -168,7 +182,7 @@ class TestCompleteWorkflow:
             assert isinstance(diff1_data, dict)
             
             # Test diff between snap1 and snap2
-            diff2_result = workspace.diff("employees.csv", "snap1", "snap2")
+            diff2_result = workspace.diff("employees.csv", snap1_name, snap2_name)
             assert isinstance(diff2_result, str)
             assert diff2_result  # Should not be empty
             
@@ -176,7 +190,7 @@ class TestCompleteWorkflow:
             assert isinstance(diff2_data, dict)
             
             # Test diff between baseline and snap2
-            diff3_result = workspace.diff("employees.csv", "baseline", "snap2")
+            diff3_result = workspace.diff("employees.csv", baseline_name, snap2_name)
             assert isinstance(diff3_result, str)
             assert diff3_result  # Should not be empty
             

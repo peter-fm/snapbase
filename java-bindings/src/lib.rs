@@ -11,9 +11,10 @@ use jni::JNIEnv;
 use std::path::{Path, PathBuf};
 
 use snapbase_core::{
-    change_detection::StreamingChangeDetector, config::get_snapshot_config_with_workspace, naming::SnapshotNamer,
-    query::SnapshotQueryEngine, resolver::SnapshotResolver, snapshot::SnapshotMetadata,
-    ExportFormat, ExportOptions, Result as SnapbaseResult, SnapbaseWorkspace, UnifiedExporter,
+    change_detection::StreamingChangeDetector, config::get_snapshot_config_with_workspace,
+    naming::SnapshotNamer, query::SnapshotQueryEngine, resolver::SnapshotResolver,
+    snapshot::SnapshotMetadata, ExportFormat, ExportOptions, Result as SnapbaseResult,
+    SnapbaseWorkspace, UnifiedExporter,
 };
 
 /// Wrapper for SnapbaseWorkspace that can be safely passed through JNI
@@ -597,16 +598,17 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
             }
         };
 
-        let snapshot_config = match get_snapshot_config_with_workspace(Some(&workspace_handle.workspace.root)) {
-            Ok(config) => config,
-            Err(e) => {
-                let _ = env.throw_new(
-                    "com/snapbase/SnapbaseException",
-                    format!("Failed to get snapshot config: {e}"),
-                );
-                return std::ptr::null_mut();
-            }
-        };
+        let snapshot_config =
+            match get_snapshot_config_with_workspace(Some(&workspace_handle.workspace.root)) {
+                Ok(config) => config,
+                Err(e) => {
+                    let _ = env.throw_new(
+                        "com/snapbase/SnapbaseException",
+                        format!("Failed to get snapshot config: {e}"),
+                    );
+                    return std::ptr::null_mut();
+                }
+            };
 
         let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
         match namer.generate_name(&file_path_str, &existing_snapshots) {
@@ -626,6 +628,29 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(&file_path_str);
+
+    // Check if snapshot with this name already exists for this source
+    let snapshot_exists = match workspace_handle
+        .workspace
+        .snapshot_exists_for_source(source_name, &snapshot_name)
+    {
+        Ok(exists) => exists,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to check existing snapshots: {e}"),
+            );
+            return std::ptr::null_mut();
+        }
+    };
+
+    if snapshot_exists {
+        let _ = env.throw_new(
+            "com/snapbase/SnapbaseException",
+            format!("Snapshot '{}' already exists. Use a different name or remove the existing snapshot.", snapshot_name),
+        );
+        return std::ptr::null_mut();
+    }
 
     // Create the snapshot
     let metadata = match create_hive_snapshot(
@@ -1406,8 +1431,10 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetConfigInfo<'
     handle: jlong,
 ) -> jstring {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-    
-    let resolution_info = match snapbase_core::config::get_config_resolution_info(Some(&workspace_handle.workspace.root)) {
+
+    let resolution_info = match snapbase_core::config::get_config_resolution_info(Some(
+        &workspace_handle.workspace.root,
+    )) {
         Ok(info) => info,
         Err(e) => {
             let error_msg = format!("Failed to get config info: {e}");
@@ -1415,14 +1442,14 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetConfigInfo<'
             return std::ptr::null_mut();
         }
     };
-    
+
     let info_json = serde_json::json!({
         "config_source": resolution_info.config_source,
         "config_path": resolution_info.config_path,
         "workspace_path": resolution_info.workspace_path,
         "resolution_order": resolution_info.resolution_order
     });
-    
+
     let json_string = match serde_json::to_string_pretty(&info_json) {
         Ok(s) => s,
         Err(e) => {
@@ -1431,7 +1458,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetConfigInfo<'
             return std::ptr::null_mut();
         }
     };
-    
+
     match string_to_jstring(&mut env, &json_string) {
         Ok(jstr) => jstr.into_raw(),
         Err(_) => {

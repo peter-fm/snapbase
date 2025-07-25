@@ -72,7 +72,17 @@ public class SnapbaseWorkspace implements Closeable {
      * @throws SnapbaseException if workspace creation fails
      */
     public SnapbaseWorkspace(Path workspacePath) throws SnapbaseException {
-        this.workspacePath = workspacePath;
+        // Resolve relative paths using Java's current directory
+        Path resolvedPath;
+        if (workspacePath.isAbsolute()) {
+            resolvedPath = workspacePath;
+        } else {
+            // Use Java's system property for current directory, which can be changed via System.setProperty
+            String userDir = System.getProperty("user.dir");
+            resolvedPath = Paths.get(userDir).resolve(workspacePath);
+        }
+        
+        this.workspacePath = resolvedPath;
         this.allocator = new RootAllocator();
         this.executor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "snapbase-async");
@@ -80,7 +90,7 @@ public class SnapbaseWorkspace implements Closeable {
             return t;
         });
         
-        this.nativeHandle = nativeCreateWorkspace(workspacePath.toString());
+        this.nativeHandle = nativeCreateWorkspace(resolvedPath.toString());
         if (this.nativeHandle == 0) {
             throw new SnapbaseException("Failed to create workspace");
         }

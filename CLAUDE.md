@@ -128,7 +128,7 @@ uv run python <args>
 2. **Hive-style storage** - Organizes data in partitioned directory structure
 3. **Multiple storage backends** - Local filesystem, S3, and S3 Express One Zone (Directory Buckets) support
 4. **Change detection** - Detects schema changes, row additions/deletions, and cell-level modifications
-5. **Rollback capability** - Can restore files to previous snapshot states (full data mode only)
+5. **Rollback capability** - Can restore files to previous snapshot states.
 6. **SQL querying** - Query historical snapshots using SQL
 7. **Compression and archiving** - Efficient storage with cleanup capabilities
 
@@ -190,13 +190,6 @@ availability_zone = "use1-az5"
 - Provides up to 200k read TPS and 100k write TPS for high-performance workloads
 
 ## Important Implementation Details
-
-### True Snapshots Architecture (v2.0+)
-- **True Snapshots**: Each snapshot contains ONLY the data that existed at that point in time
-- **No Removed Rows**: Removed rows are NOT stored in snapshots (eliminated `__snapbase_removed` column)
-- **4 Metadata Columns**: Only `__snapbase_added`, `__snapbase_modified`, `snapshot_name`, `snapshot_timestamp`
-- **Simplified Logic**: No more `exclude_removed` parameters - all snapshot data is current
-- **Better UX**: Users see intuitive snapshot behavior where each snapshot represents the actual state
 
 ### Storage Architecture
 - Modern Hive-style partitioning replaces legacy archive system

@@ -4,7 +4,7 @@
   <groupId>com.snapbase</groupId>
   <artifactId>snapbase-java</artifactId>
   <name>Snapbase Java API</name>
-  <version>0.1.1</version>
+  <version>0.1.2</version>
   <description>Java API for snapbase - snapshot-based structured data diff tool</description>
   <url>https://github.com/peter-fm/snapbase</url>
   <developers>

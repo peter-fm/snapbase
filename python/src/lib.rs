@@ -89,6 +89,17 @@ impl Workspace {
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to generate snapshot name: {}", e)))?
         };
 
+        // Check if snapshot with this name already exists for this source
+        let snapshot_exists = self.workspace.snapshot_exists_for_source(file_path, &snapshot_name)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to check existing snapshots: {}", e)))?;
+        
+        if snapshot_exists {
+            return Err(PyRuntimeError::new_err(format!(
+                "Snapshot '{}' already exists. Use a different name or remove the existing snapshot.", 
+                snapshot_name
+            )));
+        }
+
         // Create the snapshot using the same logic as CLI
         let metadata = create_hive_snapshot(&self.workspace, &input_path, file_path, &snapshot_name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create snapshot: {}", e)))?;

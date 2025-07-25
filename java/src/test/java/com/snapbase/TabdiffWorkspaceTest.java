@@ -27,14 +27,16 @@ class SnapbaseWorkspaceTest {
     private SnapbaseWorkspace workspace;
     private Path testDataFile;
     
+    
     @BeforeEach
     void setUp() throws IOException, SnapbaseException {
         // Create test workspace
         workspace = new SnapbaseWorkspace(tempDir.toString());
         workspace.init();
         
-        // Create test data file
-        testDataFile = tempDir.resolve("test_data.csv");
+        // Create test data file with unique name to avoid auto-naming conflicts
+        String uniqueFileName = "test_data_" + java.util.UUID.randomUUID().toString().substring(0, 8) + ".csv";
+        testDataFile = tempDir.resolve(uniqueFileName);
         String csvContent = "id,name,value\n" +
                            "1,Alice,100\n" +
                            "2,Bob,200\n" +
@@ -57,10 +59,11 @@ class SnapbaseWorkspaceTest {
     
     @Test
     void testCreateSnapshot() throws SnapbaseException {
-        String result = workspace.createSnapshot(testDataFile.toString(), "test_snapshot");
+        String snapshotName = TestUtils.uniqueSnapshotName("test_snapshot");
+        String result = workspace.createSnapshot(testDataFile.toString(), snapshotName);
         assertNotNull(result);
         assertTrue(result.contains("Created snapshot"));
-        assertTrue(result.contains("test_snapshot"));
+        assertTrue(result.contains(snapshotName));
         assertTrue(result.contains("3 rows"));
         assertTrue(result.contains("3 columns"));
     }
@@ -77,18 +80,19 @@ class SnapbaseWorkspaceTest {
     @Test
     void testListSnapshots() throws SnapbaseException {
         // Create a snapshot first
-        workspace.createSnapshot(testDataFile.toString(), "test_snapshot");
+        String snapshotName = TestUtils.uniqueSnapshotName("test_snapshot");
+        workspace.createSnapshot(testDataFile.toString(), snapshotName);
         
         List<String> snapshots = workspace.listSnapshots();
         assertNotNull(snapshots);
         assertFalse(snapshots.isEmpty());
-        assertTrue(snapshots.contains("test_snapshot"));
+        assertTrue(snapshots.contains(snapshotName));
     }
     
     @Test
     void testSnapshotExists() throws SnapbaseException {
         // Use a unique snapshot name to avoid conflicts
-        String uniqueSnapshotName = "unique_test_" + System.currentTimeMillis();
+        String uniqueSnapshotName = TestUtils.uniqueSnapshotName("unique_test");
         
         // Initially no snapshots with this name
         assertFalse(workspace.snapshotExists(uniqueSnapshotName));
@@ -103,7 +107,8 @@ class SnapbaseWorkspaceTest {
     @Test
     void testStatus() throws SnapbaseException, IOException {
         // Create initial snapshot
-        workspace.createSnapshot(testDataFile.toString(), "baseline");
+        String baselineName = TestUtils.uniqueSnapshotName("baseline");
+        workspace.createSnapshot(testDataFile.toString(), baselineName);
         
         // Modify the file
         String updatedCsvContent = "id,name,value\n" +
@@ -113,7 +118,7 @@ class SnapbaseWorkspaceTest {
         Files.write(testDataFile, updatedCsvContent.getBytes());
         
         // Check status
-        ChangeDetectionResult changes = workspace.status(testDataFile.toString(), "baseline");
+        ChangeDetectionResult changes = workspace.status(testDataFile.toString(), baselineName);
         assertNotNull(changes);
         
         // Verify the result has expected structure
@@ -124,7 +129,8 @@ class SnapbaseWorkspaceTest {
     @Test
     void testQueryArrow() throws SnapbaseException {
         // Create a snapshot first
-        workspace.createSnapshot(testDataFile.toString(), "test_snapshot");
+        String snapshotName = TestUtils.uniqueSnapshotName("test_snapshot");
+        workspace.createSnapshot(testDataFile.toString(), snapshotName);
         
         // Query the data using just the filename (like CLI does)
         String sourceFile = testDataFile.getFileName().toString(); // "test_data.csv"
@@ -156,7 +162,8 @@ class SnapbaseWorkspaceTest {
     @Test
     void testQueryColumn() throws SnapbaseException {
         // Create a snapshot first
-        workspace.createSnapshot(testDataFile.toString(), "test_snapshot");
+        String snapshotName = TestUtils.uniqueSnapshotName("test_snapshot");
+        workspace.createSnapshot(testDataFile.toString(), snapshotName);
         
         String sourceFile = testDataFile.getFileName().toString();
         
@@ -176,7 +183,8 @@ class SnapbaseWorkspaceTest {
     @Test
     void testQueryPerformance() throws SnapbaseException {
         // Create a snapshot first
-        workspace.createSnapshot(testDataFile.toString(), "test_snapshot");
+        String snapshotName = TestUtils.uniqueSnapshotName("test_snapshot");
+        workspace.createSnapshot(testDataFile.toString(), snapshotName);
         
         String sourceFile = testDataFile.getFileName().toString();
         
@@ -199,7 +207,8 @@ class SnapbaseWorkspaceTest {
     @Test
     void testStats() throws SnapbaseException {
         // Create a snapshot first
-        workspace.createSnapshot(testDataFile.toString(), "test_snapshot");
+        String snapshotName = TestUtils.uniqueSnapshotName("test_snapshot");
+        workspace.createSnapshot(testDataFile.toString(), snapshotName);
         
         String stats = workspace.stats();
         assertNotNull(stats);
@@ -214,7 +223,8 @@ class SnapbaseWorkspaceTest {
     @Test
     void testDiff() throws SnapbaseException, IOException {
         // Create first snapshot
-        workspace.createSnapshot(testDataFile.toString(), "snapshot1");
+        String snapshot1Name = TestUtils.uniqueSnapshotName("snapshot1");
+        workspace.createSnapshot(testDataFile.toString(), snapshot1Name);
         
         // Modify the file
         String updatedCsvContent = "id,name,value\n" +
@@ -224,11 +234,12 @@ class SnapbaseWorkspaceTest {
         Files.write(testDataFile, updatedCsvContent.getBytes());
         
         // Create second snapshot
-        workspace.createSnapshot(testDataFile.toString(), "snapshot2");
+        String snapshot2Name = TestUtils.uniqueSnapshotName("snapshot2");
+        workspace.createSnapshot(testDataFile.toString(), snapshot2Name);
         
         // Compare snapshots using filename
         String sourceFile = testDataFile.getFileName().toString();
-        ChangeDetectionResult diff = workspace.diff(sourceFile, "snapshot1", "snapshot2");
+        ChangeDetectionResult diff = workspace.diff(sourceFile, snapshot1Name, snapshot2Name);
         assertNotNull(diff);
         
         // Verify the result has expected structure
@@ -238,11 +249,12 @@ class SnapbaseWorkspaceTest {
     
     @Test
     void testAsyncSnapshot() throws Exception {
-        String result = workspace.createSnapshotAsync(testDataFile.toString(), "async_test")
+        String asyncSnapshotName = TestUtils.uniqueSnapshotName("async_test");
+        String result = workspace.createSnapshotAsync(testDataFile.toString(), asyncSnapshotName)
                 .get(); // Wait for completion
         
         assertNotNull(result);
-        assertTrue(result.contains("async_test"));
+        assertTrue(result.contains(asyncSnapshotName));
     }
     
     @Test

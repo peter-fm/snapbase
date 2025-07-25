@@ -721,6 +721,29 @@ region = "{}"
     pub fn is_cloud_storage(&self) -> bool {
         matches!(self.config, StorageConfig::S3 { .. })
     }
+
+    /// Check if a snapshot with the given name exists for a specific source
+    pub fn snapshot_exists_for_source(
+        &self,
+        source_name: &str,
+        snapshot_name: &str,
+    ) -> Result<bool> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            // Get all snapshots for this source from the storage backend
+            let all_snapshots = self.storage().list_snapshots_for_all_sources().await?;
+
+            // Use the source name (filename) as the key, same as hive directory structure
+            let source_key = source_name.to_string();
+
+            // Check if this snapshot name exists for this source
+            if let Some(snapshots) = all_snapshots.get(&source_key) {
+                Ok(snapshots.contains(&snapshot_name.to_string()))
+            } else {
+                Ok(false)
+            }
+        })
+    }
 }
 
 /// Statistics about the workspace

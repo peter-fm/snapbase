@@ -160,11 +160,12 @@ public class ConfigContextTest {
             workspace.init();
             
             // Test snapshot creation - should use workspace config context
-            String result = workspace.createSnapshot(testData.toString(), "test_snapshot");
-            assertTrue(result.contains("test_snapshot"), "Should create snapshot with given name");
+            String snapshotName = TestUtils.uniqueSnapshotName("test_snapshot");
+            String result = workspace.createSnapshot(testData.toString(), snapshotName);
+            assertTrue(result.contains(snapshotName), "Should create snapshot with given name");
             
             // Verify snapshot exists
-            assertTrue(workspace.snapshotExists("test_snapshot"), "Snapshot should exist in workspace context");
+            assertTrue(workspace.snapshotExists(snapshotName), "Snapshot should exist in workspace context");
             
             // Verify workspace path is correct
             String workspacePath = workspace.getPath();

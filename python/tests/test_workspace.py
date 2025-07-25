@@ -188,3 +188,17 @@ class TestWorkspaceErrors:
         # Check status with non-existent baseline (should raise error)
         with pytest.raises(RuntimeError, match="Failed to resolve baseline snapshot"):
             workspace.status("/nonexistent/file.csv", "nonexistent_baseline")
+    
+    def test_duplicate_snapshot_name_validation(self, temp_workspace, sample_csv_file):
+        """Test that duplicate snapshot names are rejected"""
+        workspace = Workspace(str(temp_workspace))
+        workspace.init()
+        
+        # Create first snapshot
+        result1 = workspace.create_snapshot(sample_csv_file.name, "duplicate_test")
+        assert "duplicate_test" in result1
+        assert workspace.snapshot_exists("duplicate_test")
+        
+        # Attempt to create second snapshot with same name should fail
+        with pytest.raises(RuntimeError, match="Snapshot 'duplicate_test' already exists"):
+            workspace.create_snapshot(sample_csv_file.name, "duplicate_test")

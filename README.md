@@ -56,7 +56,7 @@ uv add "git+https://github.com/peter-fm/snapbase.git@main#subdirectory=python"
 <dependency>
     <groupId>com.snapbase</groupId>
     <artifactId>snapbase-java</artifactId>
-    <version>0.1.0</version>
+    <version>latest</version>
 </dependency>
 ```
 

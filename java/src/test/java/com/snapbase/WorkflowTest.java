@@ -25,6 +25,7 @@ class WorkflowTest {
     
     private SnapbaseWorkspace workspace;
     
+    
     // Test data that matches the CLI workflow
     private static final String EMPLOYEES_BASELINE = "id,name,department,salary,hire_date\n" +
             "1,Alice Johnson,Engineering,75000,2023-01-15\n" +
@@ -64,22 +65,27 @@ class WorkflowTest {
     void testCompleteWorkflow() throws IOException, SnapbaseException {
         Path employeesFile = tempDir.resolve("employees.csv");
         
+        // Use unique snapshot names to avoid conflicts
+        String baselineName = TestUtils.uniqueSnapshotName("baseline");
+        String snap1Name = TestUtils.uniqueSnapshotName("snap1");
+        String snap2Name = TestUtils.uniqueSnapshotName("snap2");
+        
         // Step 1: Create baseline snapshot (equivalent to: cp employees_baseline.csv employees.csv && snapbase snapshot employees.csv --name baseline)
         Files.write(employeesFile, EMPLOYEES_BASELINE.getBytes(StandardCharsets.UTF_8));
         
-        String baselineResult = workspace.createSnapshot("employees.csv", "baseline");
+        String baselineResult = workspace.createSnapshot("employees.csv", baselineName);
         assertNotNull(baselineResult);
-        assertTrue(baselineResult.contains("baseline"));
+        assertTrue(baselineResult.contains(baselineName));
         
         // Verify snapshot was created
-        assertTrue(workspace.snapshotExists("baseline"));
+        assertTrue(workspace.snapshotExists(baselineName));
         
         // Step 2: Update data and check changes (equivalent to: cp employees_snapshot1.csv employees.csv && snapbase status employees.csv)
         Files.write(employeesFile, EMPLOYEES_SNAPSHOT1.getBytes(StandardCharsets.UTF_8));
         
         // Test status check (equivalent to status command)
         try {
-            ChangeDetectionResult changes = workspace.status("employees.csv", "baseline");
+            ChangeDetectionResult changes = workspace.status("employees.csv", baselineName);
             assertNotNull(changes);
             
             // Verify the result has expected structure
@@ -91,17 +97,17 @@ class WorkflowTest {
         }
         
         // Step 3: Create snapshot1 (equivalent to: snapbase snapshot employees.csv --name snap1)
-        String snap1Result = workspace.createSnapshot("employees.csv", "snap1");
+        String snap1Result = workspace.createSnapshot("employees.csv", snap1Name);
         assertNotNull(snap1Result);
-        assertTrue(snap1Result.contains("snap1"));
-        assertTrue(workspace.snapshotExists("snap1"));
+        assertTrue(snap1Result.contains(snap1Name));
+        assertTrue(workspace.snapshotExists(snap1Name));
         
         // Step 4: Update data again (equivalent to: cp employees_snapshot2.csv employees.csv && snapbase status employees.csv)
         Files.write(employeesFile, EMPLOYEES_SNAPSHOT2.getBytes(StandardCharsets.UTF_8));
         
         // Check status again
         try {
-            ChangeDetectionResult changes2 = workspace.status("employees.csv", "snap1");
+            ChangeDetectionResult changes2 = workspace.status("employees.csv", snap1Name);
             assertNotNull(changes2);
             // Verify the result has expected structure
             assertNotNull(changes2.getSchemaChanges());
@@ -111,10 +117,10 @@ class WorkflowTest {
         }
         
         // Step 5: Create snapshot2 (equivalent to: snapbase snapshot employees.csv --name snap2)
-        String snap2Result = workspace.createSnapshot("employees.csv", "snap2");
+        String snap2Result = workspace.createSnapshot("employees.csv", snap2Name);
         assertNotNull(snap2Result);
-        assertTrue(snap2Result.contains("snap2"));
-        assertTrue(workspace.snapshotExists("snap2"));
+        assertTrue(snap2Result.contains(snap2Name));
+        assertTrue(workspace.snapshotExists(snap2Name));
         
         // Step 6: Test export functionality (equivalent to: snapbase export employees.csv --file backup.csv --to snap2 --force)
         testExportFunctionality(employeesFile);
@@ -251,20 +257,22 @@ class WorkflowTest {
     @DisplayName("Workflow error handling")
     void testWorkflowErrorHandling() throws IOException, SnapbaseException {
         // Test snapshot with non-existent file
+        String testSnapshotName = TestUtils.uniqueSnapshotName("test");
         assertThrows(SnapbaseException.class, () -> {
-            workspace.createSnapshot("nonexistent.csv", "test");
+            workspace.createSnapshot("nonexistent.csv", testSnapshotName);
         });
         
         // Create valid snapshot for diff testing
         Path testFile = tempDir.resolve("test.csv");
         Files.write(testFile, "id,name\n1,Alice\n2,Bob\n".getBytes());
         
-        String validResult = workspace.createSnapshot("test.csv", "valid");
+        String validSnapshotName = TestUtils.uniqueSnapshotName("valid");
+        String validResult = workspace.createSnapshot("test.csv", validSnapshotName);
         assertNotNull(validResult);
         
         // Test diff with non-existent snapshot
         assertThrows(SnapbaseException.class, () -> {
-            workspace.diff("test.csv", "nonexistent", "valid");
+            workspace.diff("test.csv", "nonexistent", validSnapshotName);
         });
         
         // Test query with non-existent source
@@ -280,9 +288,10 @@ class WorkflowTest {
         Path emptyFile = tempDir.resolve("empty.csv");
         Files.write(emptyFile, "id,name\n".getBytes()); // Header only
         
-        String emptyResult = workspace.createSnapshot("empty.csv", "empty");
+        String emptySnapshotName = TestUtils.uniqueSnapshotName("empty");
+        String emptyResult = workspace.createSnapshot("empty.csv", emptySnapshotName);
         assertNotNull(emptyResult);
-        assertTrue(emptyResult.contains("empty"));
+        assertTrue(emptyResult.contains(emptySnapshotName));
         
         // Test large file handling
         Path largeFile = tempDir.resolve("large.csv");
@@ -292,9 +301,10 @@ class WorkflowTest {
         }
         Files.write(largeFile, largeContent.toString().getBytes());
         
-        String largeResult = workspace.createSnapshot("large.csv", "large");
+        String largeSnapshotName = TestUtils.uniqueSnapshotName("large");
+        String largeResult = workspace.createSnapshot("large.csv", largeSnapshotName);
         assertNotNull(largeResult);
-        assertTrue(largeResult.contains("large"));
+        assertTrue(largeResult.contains(largeSnapshotName));
         
         // Test special characters in data
         Path specialFile = tempDir.resolve("special.csv");
@@ -304,9 +314,10 @@ class WorkflowTest {
                 "3,\"مُحَمَّد\",\"اختبار العربية\"\n";
         Files.write(specialFile, specialContent.getBytes(StandardCharsets.UTF_8));
         
-        String specialResult = workspace.createSnapshot("special.csv", "special");
+        String specialSnapshotName = TestUtils.uniqueSnapshotName("special");
+        String specialResult = workspace.createSnapshot("special.csv", specialSnapshotName);
         assertNotNull(specialResult);
-        assertTrue(specialResult.contains("special"));
+        assertTrue(specialResult.contains(specialSnapshotName));
         
         System.out.println("✅ Edge cases test completed successfully");
     }
@@ -332,14 +343,15 @@ class WorkflowTest {
             
             // Time the snapshot creation
             long startTime = System.nanoTime();
-            String result = workspace.createSnapshot("perf_test.csv", "snapshot_" + i);
+            String snapshotName = TestUtils.uniqueSnapshotName("snapshot_" + i);
+            String result = workspace.createSnapshot("perf_test.csv", snapshotName);
             long endTime = System.nanoTime();
             
             long snapshotTime = endTime - startTime;
             totalTime += snapshotTime;
             
             assertNotNull(result);
-            assertTrue(result.contains("snapshot_" + i));
+            assertTrue(result.contains(snapshotName));
         }
         
         long avgTimeMs = (totalTime / numSnapshots) / 1_000_000;
@@ -358,7 +370,8 @@ class WorkflowTest {
         Path persistentFile = tempDir.resolve("persistent.csv");
         Files.write(persistentFile, "id,name\n1,Alice\n2,Bob\n".getBytes());
         
-        String result1 = workspace.createSnapshot("persistent.csv", "persistent_test");
+        String persistentSnapshotName = TestUtils.uniqueSnapshotName("persistent_test");
+        String result1 = workspace.createSnapshot("persistent.csv", persistentSnapshotName);
         assertNotNull(result1);
         
         // Close first workspace
@@ -369,7 +382,7 @@ class WorkflowTest {
         
         try {
             // Should be able to access the same data
-            assertTrue(workspace2.snapshotExists("persistent_test"));
+            assertTrue(workspace2.snapshotExists(persistentSnapshotName));
             
             // Test querying data created by first instance
             try (VectorSchemaRoot result = workspace2.query("persistent.csv", "SELECT * FROM data")) {
@@ -379,9 +392,10 @@ class WorkflowTest {
             
             // Test creating another snapshot with second instance
             Files.write(persistentFile, "id,name\n1,Alice\n2,Bob\n3,Charlie\n".getBytes());
-            String result2 = workspace2.createSnapshot("persistent.csv", "persistent_test_2");
+            String persistentSnapshot2Name = TestUtils.uniqueSnapshotName("persistent_test_2");
+            String result2 = workspace2.createSnapshot("persistent.csv", persistentSnapshot2Name);
             assertNotNull(result2);
-            assertTrue(workspace2.snapshotExists("persistent_test_2"));
+            assertTrue(workspace2.snapshotExists(persistentSnapshot2Name));
             
             System.out.println("✅ Persistence test completed successfully");
             
@@ -408,9 +422,10 @@ class WorkflowTest {
         
         // Create snapshots for all files
         for (int i = 0; i < 3; i++) {
-            String result = workspace.createSnapshot("concurrent_" + i + ".csv", "concurrent_snapshot_" + i);
+            String concurrentSnapshotName = TestUtils.uniqueSnapshotName("concurrent_snapshot_" + i);
+            String result = workspace.createSnapshot("concurrent_" + i + ".csv", concurrentSnapshotName);
             assertNotNull(result);
-            assertTrue(result.contains("concurrent_snapshot_" + i));
+            assertTrue(result.contains(concurrentSnapshotName));
         }
         
         // Test querying all files
@@ -423,5 +438,27 @@ class WorkflowTest {
         }
         
         System.out.println("✅ Concurrent operations test completed successfully");
+    }
+    
+    @Test
+    @DisplayName("Test duplicate snapshot name validation")
+    void testDuplicateSnapshotNameValidation() throws IOException, SnapbaseException {
+        Path employeesFile = tempDir.resolve("employees.csv");
+        Files.write(employeesFile, EMPLOYEES_BASELINE.getBytes(StandardCharsets.UTF_8));
+        
+        // Create first snapshot with unique name
+        String duplicateTestName = TestUtils.uniqueSnapshotName("duplicate_test");
+        String result1 = workspace.createSnapshot("employees.csv", duplicateTestName);
+        assertNotNull(result1);
+        assertTrue(result1.contains(duplicateTestName));
+        assertTrue(workspace.snapshotExists(duplicateTestName));
+        
+        // Attempt to create second snapshot with same name should fail
+        SnapbaseException exception = assertThrows(SnapbaseException.class, () -> {
+            workspace.createSnapshot("employees.csv", duplicateTestName);
+        });
+        
+        assertTrue(exception.getMessage().contains("already exists"));
+        System.out.println("✅ Duplicate snapshot name validation test completed successfully");
     }
 }

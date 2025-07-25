@@ -1220,9 +1220,10 @@ fn config_command(
             local_path,
             *global,
         ),
-        crate::cli::ConfigCommand::Show { paths, workspace_context } => {
-            show_current_config(*paths, *workspace_context, workspace_path)
-        },
+        crate::cli::ConfigCommand::Show {
+            paths,
+            workspace_context,
+        } => show_current_config(*paths, *workspace_context, workspace_path),
         crate::cli::ConfigCommand::DefaultName { pattern } => configure_default_name(pattern),
     }
 }
@@ -1335,16 +1336,22 @@ fn configure_storage(
     Ok(())
 }
 
-fn show_current_config(show_paths: bool, workspace_context: bool, workspace_path: Option<&Path>) -> Result<()> {
+fn show_current_config(
+    show_paths: bool,
+    workspace_context: bool,
+    workspace_path: Option<&Path>,
+) -> Result<()> {
     if workspace_context {
         // Show config from workspace perspective
         if let Some(workspace_path) = workspace_path {
-            let (storage_config, resolution_info) = config::get_storage_config_with_resolution_info(Some(workspace_path))?;
+            let (storage_config, resolution_info) =
+                config::get_storage_config_with_resolution_info(Some(workspace_path))?;
             show_config_with_resolution(&storage_config, &resolution_info, show_paths);
         } else {
             // Try to find workspace
             if let Ok(workspace) = SnapbaseWorkspace::find_or_create(None) {
-                let (storage_config, resolution_info) = config::get_storage_config_with_resolution_info(Some(&workspace.root))?;
+                let (storage_config, resolution_info) =
+                    config::get_storage_config_with_resolution_info(Some(&workspace.root))?;
                 show_config_with_resolution(&storage_config, &resolution_info, show_paths);
             } else {
                 println!("⚠️  No workspace found. Use 'snapbase init' to create one or specify --workspace.");
@@ -1358,11 +1365,15 @@ fn show_current_config(show_paths: bool, workspace_context: bool, workspace_path
         show_config_with_resolution(&config.storage.to_runtime(), &resolution_info, show_paths);
         show_snapshot_config(&config.snapshot);
     }
-    
+
     Ok(())
 }
 
-fn show_config_with_resolution(config: &config::StorageConfig, resolution_info: &config::ConfigResolutionInfo, show_paths: bool) {
+fn show_config_with_resolution(
+    config: &config::StorageConfig,
+    resolution_info: &config::ConfigResolutionInfo,
+    show_paths: bool,
+) {
     if show_paths {
         println!("Configuration Resolution:");
         println!("  Source: {}", resolution_info.config_source);
@@ -1374,7 +1385,7 @@ fn show_config_with_resolution(config: &config::StorageConfig, resolution_info: 
         if let Some(workspace_path) = &resolution_info.workspace_path {
             println!("  Workspace: {}", workspace_path);
         }
-        
+
         println!("\nResolution order (first found wins):");
         for (i, source) in resolution_info.resolution_order.iter().enumerate() {
             let marker = if let Some(ref used_config_path) = resolution_info.config_path {
@@ -1392,7 +1403,7 @@ fn show_config_with_resolution(config: &config::StorageConfig, resolution_info: 
         }
         println!();
     }
-    
+
     show_config(config);
 }
 
