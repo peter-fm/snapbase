@@ -24,7 +24,7 @@ impl StorageBackend for LocalStorage {
 
     async fn ensure_directory(&self, path: &str) -> Result<()> {
         let full_path = self.base_path.join(path);
-        std::fs::create_dir_all(full_path)?;
+        std::fs::create_dir_all(&full_path)?;
         Ok(())
     }
 

@@ -31,6 +31,7 @@ impl Workspace {
     #[new]
     #[pyo3(signature = (workspace_path=None))]
     fn new(workspace_path: Option<&str>) -> PyResult<Self> {
+        log::debug!("🚨 PYTHON WORKSPACE CONSTRUCTOR CALLED with path: {:?}", workspace_path);
         let workspace = if let Some(path_str) = workspace_path {
             let path = PathBuf::from(path_str);
             // Use create_at_path to avoid directory traversal when explicit path is provided
@@ -54,13 +55,15 @@ impl Workspace {
     /// Create a snapshot of the given file
     #[pyo3(signature = (file_path, name=None))]
     fn create_snapshot(&mut self, file_path: &str, name: Option<&str>) -> PyResult<String> {
+        // Debug: Print workspace and storage config info
+
         // Convert file path to absolute path
         let input_path = if Path::new(file_path).is_absolute() {
             PathBuf::from(file_path)
         } else {
-            self.workspace.root.join(file_path)
+            self.workspace.root().join(file_path)
         };
-
+        
         // Generate snapshot name if not provided
         let snapshot_name = if let Some(name) = name {
             name.to_string()
@@ -82,7 +85,7 @@ impl Workspace {
             }).map_err(|e| PyRuntimeError::new_err(format!("Failed to list existing snapshots: {}", e)))?;
 
             // Use configured pattern to generate name
-            let snapshot_config = get_snapshot_config_with_workspace(Some(&self.workspace.root))
+            let snapshot_config = get_snapshot_config_with_workspace(Some(self.workspace.root()))
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to get snapshot config: {}", e)))?;
             let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
             namer.generate_name(file_path, &existing_snapshots)
@@ -116,7 +119,7 @@ impl Workspace {
         let input_path = if Path::new(file_path).is_absolute() {
             PathBuf::from(file_path)
         } else {
-            self.workspace.root.join(file_path)
+            self.workspace.root().join(file_path)
         };
         
         let _canonical_input_path = input_path.canonicalize()
@@ -190,7 +193,7 @@ impl Workspace {
 
     /// Get workspace path
     fn get_path(&self) -> PyResult<String> {
-        Ok(self.workspace.root.to_string_lossy().to_string())
+        Ok(self.workspace.root().to_string_lossy().to_string())
     }
 
     /// List all snapshots
@@ -314,7 +317,7 @@ impl Workspace {
     fn get_config_info(&self) -> PyResult<String> {
         use snapbase_core::config::get_config_resolution_info;
         
-        let resolution_info = get_config_resolution_info(Some(&self.workspace.root))
+        let resolution_info = get_config_resolution_info(Some(self.workspace.root()))
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to get config info: {}", e)))?;
         
         let info_json = serde_json::json!({
@@ -346,6 +349,8 @@ fn create_hive_snapshot(
     use snapbase_core::path_utils;
     use chrono::Utc;
 
+    // Debug: Print storage backend info
+
     // Create timestamp
     let timestamp = Utc::now();
     let timestamp_str = timestamp.format("%Y%m%dT%H%M%S%.6fZ").to_string();
@@ -358,9 +363,12 @@ fn create_hive_snapshot(
         &format!("snapshot_timestamp={timestamp_str}")
     ], workspace.storage());
     
+    log::debug!("🔍 DEBUG: Hive path: {}", hive_path_str);
+    
     // Use async runtime to handle storage backend operations
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
+        log::debug!("🔍 DEBUG: Ensuring directory: {}", hive_path_str);
         workspace.storage().ensure_directory(&hive_path_str).await
     })?;
     
@@ -372,8 +380,12 @@ fn create_hive_snapshot(
     let parquet_relative_path = format!("{hive_path_str}/data.parquet");
     let parquet_path = workspace.storage().get_duckdb_path(&parquet_relative_path);
     
+    log::debug!("🔍 DEBUG: Parquet relative path: {}", parquet_relative_path);
+    log::debug!("🔍 DEBUG: DuckDB parquet path: {}", parquet_path);
+    
     // Export to Parquet using the same method as CLI
     let temp_path = std::path::Path::new(&parquet_path);
+    log::debug!("🔍 DEBUG: Exporting to parquet: {}", temp_path.display());
     processor.export_to_parquet(temp_path)?;
     
     // Create metadata
@@ -399,6 +411,7 @@ fn create_hive_snapshot(
     // Write metadata using storage backend
     let metadata_bytes = metadata_json.as_bytes();
     rt.block_on(async {
+        log::debug!("🔍 DEBUG: Writing metadata to: {}", metadata_path);
         workspace.storage().write_file(&metadata_path, metadata_bytes).await
     })?;
     
@@ -410,6 +423,7 @@ fn create_hive_snapshot(
 /// import the module.
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    pyo3_log::init();
     m.add_class::<Workspace>()?;
     
     // Add change detection result types

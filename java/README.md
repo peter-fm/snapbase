@@ -397,6 +397,303 @@ try (FieldVector prices = workspace.queryColumn("products.csv",
 }
 ```
 
+## Working with Query Results
+
+Unlike Python where Snapbase returns Polars DataFrames, the Java API returns Apache Arrow `VectorSchemaRoot` objects for zero-copy performance. Here's how to manipulate these results to extract data into standard Java types.
+
+### Basic Data Extraction from VectorSchemaRoot
+
+```java
+// Query returns VectorSchemaRoot - Apache Arrow's columnar format
+try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM data")) {
+    
+    // Get individual columns as FieldVector
+    FieldVector idColumn = result.getVector("id");
+    FieldVector nameColumn = result.getVector("name");
+    FieldVector salaryColumn = result.getVector("salary");
+    
+    // Extract values into Java types using getObject()
+    for (int i = 0; i < result.getRowCount(); i++) {
+        // Always check for null values first
+        Integer id = idColumn.isNull(i) ? null : (Integer) idColumn.getObject(i);
+        String name = nameColumn.isNull(i) ? null : (String) nameColumn.getObject(i);
+        Long salary = salaryColumn.isNull(i) ? null : (Long) salaryColumn.getObject(i);
+        
+        System.out.printf("ID: %d, Name: %s, Salary: %d%n", id, name, salary);
+    }
+}
+```
+
+### Converting to Java Collections
+
+Convert Arrow results to familiar Java data structures:
+
+```java
+// Convert entire result to List<Map<String, Object>> - similar to DataFrame rows
+public static List<Map<String, Object>> toRowMaps(VectorSchemaRoot result) {
+    List<Map<String, Object>> rows = new ArrayList<>();
+    
+    for (int i = 0; i < result.getRowCount(); i++) {
+        Map<String, Object> row = new HashMap<>();
+        
+        // Iterate over all columns
+        for (FieldVector vector : result.getFieldVectors()) {
+            String columnName = vector.getField().getName();
+            Object value = vector.isNull(i) ? null : vector.getObject(i);
+            row.put(columnName, value);
+        }
+        rows.add(row);
+    }
+    return rows;
+}
+
+// Usage example
+try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data")) {
+    List<Map<String, Object>> rows = toRowMaps(result);
+    
+    // Now you can use standard Java collection operations
+    for (Map<String, Object> row : rows) {
+        System.out.println("Row: " + row);
+    }
+}
+```
+
+### Filtering Data
+
+**Recommended: SQL-based filtering (most efficient)**
+```java
+// Let DuckDB do the heavy lifting - much faster than Java filtering
+try (VectorSchemaRoot filtered = workspace.query("employees.csv", 
+    "SELECT * FROM data WHERE salary > 70000 AND department = 'Engineering'")) {
+    
+    System.out.println("High-paid engineers: " + filtered.getRowCount());
+    // Process filtered results...
+}
+```
+
+**Alternative: Programmatic filtering after retrieval**
+```java
+// Convert to Java collections first, then filter
+try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM data")) {
+    List<Map<String, Object>> rows = toRowMaps(result);
+    
+    // Filter using Java Streams (similar to pandas/polars filtering)
+    List<Map<String, Object>> highSalaryEmployees = rows.stream()
+        .filter(row -> {
+            Long salary = (Long) row.get("salary");
+            return salary != null && salary > 70000L;
+        })
+        .collect(Collectors.toList());
+    
+    System.out.println("Filtered " + highSalaryEmployees.size() + " employees");
+}
+```
+
+### Grouping and Aggregation
+
+**Recommended: SQL-based aggregation**
+```java
+// Use SQL for grouping and statistics - leverages DuckDB's performance
+try (VectorSchemaRoot grouped = workspace.query("employees.csv", 
+    "SELECT department, " +
+    "       COUNT(*) as employee_count, " +
+    "       AVG(salary) as avg_salary, " +
+    "       MIN(salary) as min_salary, " +
+    "       MAX(salary) as max_salary " +
+    "FROM data " +
+    "GROUP BY department " +
+    "ORDER BY avg_salary DESC")) {
+    
+    // Extract aggregated results
+    FieldVector deptVector = grouped.getVector("department");
+    FieldVector countVector = grouped.getVector("employee_count");
+    FieldVector avgVector = grouped.getVector("avg_salary");
+    FieldVector minVector = grouped.getVector("min_salary");
+    FieldVector maxVector = grouped.getVector("max_salary");
+    
+    for (int i = 0; i < grouped.getRowCount(); i++) {
+        String dept = (String) deptVector.getObject(i);
+        Long count = (Long) countVector.getObject(i);
+        Double avgSalary = (Double) avgVector.getObject(i);
+        Long minSalary = (Long) minVector.getObject(i);
+        Long maxSalary = (Long) maxVector.getObject(i);
+        
+        System.out.printf("Department: %s%n", dept);
+        System.out.printf("  Employees: %d%n", count);
+        System.out.printf("  Avg Salary: $%.2f%n", avgSalary);
+        System.out.printf("  Salary Range: $%d - $%d%n", minSalary, maxSalary);
+        System.out.println();
+    }
+}
+```
+
+**Alternative: Java-based grouping**
+```java
+// Group data using Java Streams (similar to pandas groupby)
+try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM data")) {
+    List<Map<String, Object>> rows = toRowMaps(result);
+    
+    // Group by department
+    Map<String, List<Map<String, Object>>> groupedByDept = rows.stream()
+        .collect(Collectors.groupingBy(row -> (String) row.get("department")));
+    
+    // Calculate statistics for each group
+    for (Map.Entry<String, List<Map<String, Object>>> entry : groupedByDept.entrySet()) {
+        String department = entry.getKey();
+        List<Map<String, Object>> deptEmployees = entry.getValue();
+        
+        // Calculate average salary for this department
+        double avgSalary = deptEmployees.stream()
+            .mapToLong(emp -> (Long) emp.get("salary"))
+            .average()
+            .orElse(0.0);
+        
+        System.out.printf("Department %s: %d employees, avg salary: $%.2f%n", 
+                         department, deptEmployees.size(), avgSalary);
+    }
+}
+```
+
+### Statistical Operations
+
+**Calculate statistics via SQL (recommended)**
+```java
+// Get comprehensive statistics in a single query
+try (VectorSchemaRoot stats = workspace.query("employees.csv", 
+    "SELECT " +
+    "    COUNT(*) as total_employees, " +
+    "    AVG(salary) as mean_salary, " +
+    "    MIN(salary) as min_salary, " +
+    "    MAX(salary) as max_salary, " +
+    "    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY salary) as median_salary, " +
+    "    STDDEV(salary) as salary_stddev " +
+    "FROM data")) {
+    
+    if (stats.getRowCount() > 0) {
+        Long total = (Long) stats.getVector("total_employees").getObject(0);
+        Double mean = (Double) stats.getVector("mean_salary").getObject(0);
+        Long min = (Long) stats.getVector("min_salary").getObject(0);
+        Long max = (Long) stats.getVector("max_salary").getObject(0);
+        Double median = (Double) stats.getVector("median_salary").getObject(0);
+        Double stddev = (Double) stats.getVector("salary_stddev").getObject(0);
+        
+        System.out.println("=== Salary Statistics ===");
+        System.out.printf("Total Employees: %d%n", total);
+        System.out.printf("Mean Salary: $%.2f%n", mean);
+        System.out.printf("Median Salary: $%.2f%n", median);
+        System.out.printf("Salary Range: $%d - $%d%n", min, max);
+        System.out.printf("Standard Deviation: $%.2f%n", stddev);
+    }
+}
+```
+
+### Advanced Data Manipulation Patterns
+
+**Working with temporal data across snapshots:**
+```java
+// Analyze salary changes over time across different snapshots
+try (VectorSchemaRoot changes = workspace.query("employees.csv", 
+    "SELECT e1.name, e1.salary as old_salary, e2.salary as new_salary, " +
+    "       (e2.salary - e1.salary) as salary_change " +
+    "FROM data e1 " +
+    "JOIN data e2 ON e1.id = e2.id " +
+    "WHERE e1.snapshot_name = 'baseline' AND e2.snapshot_name = 'current' " +
+    "AND e1.salary != e2.salary " +
+    "ORDER BY salary_change DESC")) {
+    
+    System.out.println("=== Salary Changes ===");
+    for (int i = 0; i < changes.getRowCount(); i++) {
+        String name = (String) changes.getVector("name").getObject(i);
+        Long oldSalary = (Long) changes.getVector("old_salary").getObject(i);
+        Long newSalary = (Long) changes.getVector("new_salary").getObject(i);
+        Long change = (Long) changes.getVector("salary_change").getObject(i);
+        
+        System.out.printf("%s: $%d → $%d (%+d)%n", name, oldSalary, newSalary, change);
+    }
+}
+```
+
+**Type-safe column extraction utility:**
+```java
+// Utility methods for type-safe data extraction
+public static class ArrowUtils {
+    
+    public static List<String> getStringColumn(VectorSchemaRoot result, String columnName) {
+        FieldVector vector = result.getVector(columnName);
+        List<String> values = new ArrayList<>();
+        
+        for (int i = 0; i < vector.getValueCount(); i++) {
+            values.add(vector.isNull(i) ? null : (String) vector.getObject(i));
+        }
+        return values;
+    }
+    
+    public static List<Long> getLongColumn(VectorSchemaRoot result, String columnName) {
+        FieldVector vector = result.getVector(columnName);
+        List<Long> values = new ArrayList<>();
+        
+        for (int i = 0; i < vector.getValueCount(); i++) {
+            values.add(vector.isNull(i) ? null : (Long) vector.getObject(i));
+        }
+        return values;
+    }
+    
+    public static OptionalDouble getColumnAverage(VectorSchemaRoot result, String columnName) {
+        return getLongColumn(result, columnName).stream()
+            .filter(Objects::nonNull)
+            .mapToLong(Long::longValue)
+            .average();
+    }
+}
+
+// Usage
+try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data")) {
+    List<String> names = ArrowUtils.getStringColumn(result, "name");
+    List<Long> salaries = ArrowUtils.getLongColumn(result, "salary");
+    OptionalDouble avgSalary = ArrowUtils.getColumnAverage(result, "salary");
+    
+    System.out.println("Names: " + names);
+    System.out.println("Average salary: $" + avgSalary.orElse(0.0));
+}
+```
+
+### Key Differences from Python/Polars
+
+**What Java Has:**
+- ✅ Zero-copy performance via Apache Arrow
+- ✅ SQL-based filtering, grouping, and aggregation (very powerful)
+- ✅ Type-safe column access via `FieldVector`
+- ✅ Efficient temporal queries across snapshots
+- ✅ Memory-efficient streaming for large datasets
+
+**What Java Lacks (compared to Polars DataFrames):**
+- ❌ No built-in DataFrame-like API with method chaining
+- ❌ No operations like `.filter().group_by().agg()` chaining
+- ❌ No built-in statistical methods on data structures
+- ❌ No direct data visualization capabilities
+
+### Performance Recommendations
+
+1. **Use SQL for heavy lifting** - Let DuckDB handle filtering, grouping, and aggregation
+2. **Extract only what you need** - Use `SELECT` to limit columns and `LIMIT` for row counts
+3. **Stream large datasets** - Use batching with `LIMIT` and `OFFSET` for huge results
+4. **Leverage Arrow's columnar format** - Access columns directly rather than converting to row-based formats when possible
+
+```java
+// ✅ Efficient: Use SQL for complex operations
+try (VectorSchemaRoot result = workspace.query("huge_dataset.csv", 
+    "SELECT department, AVG(salary) as avg_sal FROM data " +
+    "WHERE hire_date > '2023-01-01' GROUP BY department")) {
+    // Process aggregated results
+}
+
+// ❌ Inefficient: Load all data then process in Java
+try (VectorSchemaRoot all = workspace.query("huge_dataset.csv", "SELECT * FROM data")) {
+    List<Map<String, Object>> rows = toRowMaps(all); // Memory intensive!
+    // Then filter/group in Java collections
+}
+```
+
 ### Async Operations
 
 ```java

@@ -40,3 +40,5 @@ blake3 = "1.5"
 
 # Temporary files for export operations
 tempfile = "3.0"
+pyo3-log = "0.12.4"
+log = "0.4.27"

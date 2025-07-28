@@ -191,6 +191,30 @@ availability_zone = "use1-az5"
 
 ## Important Implementation Details
 
+### Workspace Behavior Differences
+
+**CLI vs Bindings (Python/Java):**
+- **CLI**: Always operates from current working directory (like `git`)
+  - `snapbase init` creates workspace in current directory
+  - `snapbase snapshot` creates snapshots relative to current directory
+- **Python/Java Bindings**: Support explicit workspace paths with proper isolation
+  - `Workspace("/path/to/workspace")` creates/operates in specified directory
+  - Snapshots stored in workspace directory regardless of script location
+  - Critical for applications running from different directories
+
+**Example:**
+```python
+# Python script running from /Users/app/scripts/
+workspace = Workspace("../data/my_workspace")  # Creates workspace at /Users/app/data/my_workspace
+workspace.create_snapshot("file.csv", "v1")   # Stored in /Users/app/data/my_workspace/.snapbase/
+```
+
+```bash
+# CLI equivalent requires changing directories
+cd /Users/app/data/my_workspace
+snapbase snapshot file.csv --name v1  # Stored in current directory's .snapbase/
+```
+
 ### Storage Architecture
 - Modern Hive-style partitioning replaces legacy archive system
 - Metadata stored as JSON, data as Parquet files

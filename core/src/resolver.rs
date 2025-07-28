@@ -66,7 +66,7 @@ impl SnapshotResolver {
                 let source_path = if Path::new(source_file).is_absolute() {
                     PathBuf::from(source_file)
                 } else {
-                    self.workspace.root.join(source_file)
+                    self.workspace.root().join(source_file)
                 };
 
                 // Try to find snapshot matching both name and source
@@ -103,7 +103,7 @@ impl SnapshotResolver {
             // Extract the relative path from the source_path
             let source_relative_path = if let Some(source_path) = &snapshot_metadata.source_path {
                 if let Ok(canonical_source) = Path::new(source_path).canonicalize() {
-                    if let Ok(canonical_root) = self.workspace.root.canonicalize() {
+                    if let Ok(canonical_root) = self.workspace.root().canonicalize() {
                         canonical_source
                             .strip_prefix(&canonical_root)
                             .map(|p| p.to_string_lossy().to_string())
@@ -310,7 +310,7 @@ impl SnapshotResolver {
                     let source_path = if Path::new(source_file).is_absolute() {
                         PathBuf::from(source_file)
                     } else {
-                        self.workspace.root.join(source_file)
+                        self.workspace.root().join(source_file)
                     };
 
                     let canonical_source = source_path.canonicalize().ok();

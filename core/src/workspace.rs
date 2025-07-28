@@ -2,6 +2,7 @@
 
 use crate::config::StorageConfig;
 use crate::error::Result;
+use crate::path_resolver::PathResolver;
 use crate::storage::{LocalStorage, S3Storage, StorageBackend};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,12 +12,8 @@ use walkdir::WalkDir;
 /// Manages the .snapbase workspace directory
 #[derive(Clone)]
 pub struct SnapbaseWorkspace {
-    /// Project root directory (where .snapbase/ lives)
-    pub root: PathBuf,
-    /// .snapbase/ directory path (for local storage compatibility)
-    pub snapbase_dir: PathBuf,
-    /// .snapbase/diffs/ directory path (for local storage compatibility)
-    pub diffs_dir: PathBuf,
+    /// Centralized path resolver for all workspace operations
+    path_resolver: PathResolver,
     /// Storage backend for cloud/local storage
     storage_backend: Arc<dyn StorageBackend>,
     /// Storage configuration
@@ -26,32 +23,46 @@ pub struct SnapbaseWorkspace {
 impl std::fmt::Debug for SnapbaseWorkspace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SnapbaseWorkspace")
-            .field("root", &self.root)
-            .field("snapbase_dir", &self.snapbase_dir)
-            .field("diffs_dir", &self.diffs_dir)
+            .field("path_resolver", &self.path_resolver.debug_info())
             .field("config", &self.config)
             .finish()
     }
 }
 
 impl SnapbaseWorkspace {
+    /// Get the workspace root path (compatibility method)
+    pub fn root(&self) -> &Path {
+        self.path_resolver.workspace_root()
+    }
+    
+    /// Get the .snapbase directory path (compatibility method)
+    pub fn snapbase_dir(&self) -> PathBuf {
+        self.path_resolver.storage_base().to_path_buf()
+    }
+    
+    /// Get the diffs directory path (compatibility method)
+    pub fn diffs_dir(&self) -> PathBuf {
+        self.path_resolver.resolve_storage_path("diffs")
+    }
+    
+    /// Get the path resolver
+    pub fn path_resolver(&self) -> &PathResolver {
+        &self.path_resolver
+    }
     /// Create workspace at exact path without directory traversal
     pub fn create_at_path(workspace_path: &Path) -> Result<Self> {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
-            let current_dir = std::env::current_dir()?;
-            let resolved_path = if workspace_path.is_relative() {
-                current_dir.join(workspace_path)
-            } else {
-                workspace_path.to_path_buf()
-            };
+            // Create PathResolver to handle path resolution
+            let path_resolver = PathResolver::new(workspace_path.to_path_buf())?;
 
-            // Get storage configuration for the exact path
-            let config = crate::config::get_storage_config_with_workspace(Some(&resolved_path))?;
+            // Get storage configuration for the workspace
+            let config = crate::config::get_storage_config_with_workspace(Some(path_resolver.workspace_root()))?;
+            
             let storage_backend = create_storage_backend(&config).await?;
 
-            // Create workspace at exact location without traversal
-            Self::create_new(resolved_path, storage_backend, config).await
+            // Create workspace with PathResolver
+            Self::create_new_with_path_resolver(path_resolver, storage_backend, config).await
         })
     }
 
@@ -153,18 +164,22 @@ impl SnapbaseWorkspace {
         }
     }
 
-    /// Create a new workspace in the specified root directory
-    pub async fn create_new(
-        root: PathBuf,
+    /// Create a new workspace with PathResolver (new method)
+    pub async fn create_new_with_path_resolver(
+        path_resolver: PathResolver,
         storage_backend: Arc<dyn StorageBackend>,
         config: StorageConfig,
     ) -> Result<Self> {
-        let workspace = Self::from_root(root, storage_backend, config.clone())?;
+        let workspace = Self {
+            path_resolver: path_resolver.clone(),
+            storage_backend,
+            config: config.clone(),
+        };
 
         // Only create local directories if using local storage
         if matches!(config, StorageConfig::Local { .. }) {
-            fs::create_dir_all(&workspace.snapbase_dir)?;
-            // Note: No longer creating diffs_dir - we use SQL queries for diffs
+            let snapbase_dir = workspace.snapbase_dir();
+            fs::create_dir_all(&snapbase_dir)?;
 
             // Create initial config file
             workspace.create_config()?;
@@ -172,25 +187,31 @@ impl SnapbaseWorkspace {
 
         log::info!(
             "Created snapbase workspace at: {}",
-            workspace.root.display()
+            workspace.path_resolver.workspace_root().display()
         );
 
         Ok(workspace)
     }
 
-    /// Create workspace from root directory path
+    /// Create a new workspace in the specified root directory (legacy method for compatibility)
+    pub async fn create_new(
+        root: PathBuf,
+        storage_backend: Arc<dyn StorageBackend>,
+        config: StorageConfig,
+    ) -> Result<Self> {
+        let path_resolver = PathResolver::new(root)?;
+        Self::create_new_with_path_resolver(path_resolver, storage_backend, config).await
+    }
+
+    /// Create workspace from root directory path (legacy method for compatibility)
     pub fn from_root(
         root: PathBuf,
         storage_backend: Arc<dyn StorageBackend>,
         config: StorageConfig,
     ) -> Result<Self> {
-        let snapbase_dir = root.join(".snapbase");
-        let diffs_dir = snapbase_dir.join("diffs");
-
+        let path_resolver = PathResolver::new(root)?;
         Ok(Self {
-            root,
-            snapbase_dir,
-            diffs_dir,
+            path_resolver,
             storage_backend,
             config,
         })
@@ -198,14 +219,15 @@ impl SnapbaseWorkspace {
 
     /// Get paths for a snapshot (archive and JSON)
     pub fn snapshot_paths(&self, name: &str) -> (PathBuf, PathBuf) {
-        let archive_path = self.snapbase_dir.join(format!("{name}.snapbase"));
-        let json_path = self.snapbase_dir.join(format!("{name}.json"));
+        let snapbase_dir = self.snapbase_dir();
+        let archive_path = snapbase_dir.join(format!("{name}.snapbase"));
+        let json_path = snapbase_dir.join(format!("{name}.json"));
         (archive_path, json_path)
     }
 
     /// Get path for a diff result
     pub fn diff_path(&self, name1: &str, name2: &str) -> PathBuf {
-        self.diffs_dir.join(format!("{name1}-{name2}.json"))
+        self.diffs_dir().join(format!("{name1}-{name2}.json"))
     }
 
     /// List all available snapshots
@@ -222,8 +244,9 @@ impl SnapbaseWorkspace {
                     // Fallback to local filesystem for compatibility
                     let mut snapshots = Vec::new();
 
-                    if self.snapbase_dir.exists() {
-                        for entry in fs::read_dir(&self.snapbase_dir)? {
+                    let snapbase_dir = self.snapbase_dir();
+                    if snapbase_dir.exists() {
+                        for entry in fs::read_dir(&snapbase_dir)? {
                             let entry = entry?;
                             let path = entry.path();
 
@@ -446,7 +469,7 @@ impl SnapbaseWorkspace {
 
     /// Create configuration file with optional force overwrite
     pub fn create_config_with_force(&self, force: bool) -> Result<()> {
-        let config_path = self.root.join("snapbase.toml");
+        let config_path = self.path_resolver.workspace_config_path();
 
         if config_path.exists() && !force {
             return Ok(()); // Don't overwrite existing config unless forced
@@ -500,13 +523,24 @@ default_name_pattern = "{}"
     fn generate_storage_section(&self, storage: &crate::config::StorageConfigToml) -> String {
         match storage.backend {
             crate::config::StorageBackend::Local => {
-                let default_local = crate::config::LocalStorageConfig::default();
-                let local_config = storage.local.as_ref().unwrap_or(&default_local);
+                // For workspace configs, always use absolute path to prevent current directory dependencies
+                // Always use workspace_root/.snapbase to ensure workspace isolation
+                let config_path = self.path_resolver.storage_base();
+                
+                // Ensure the path is always absolute - this is a critical fix for workspace isolation
+                let absolute_path = if config_path.is_absolute() {
+                    config_path.to_path_buf()
+                } else {
+                    // This should never happen since storage_base() should always return absolute paths,
+                    // but we're adding this as a safeguard
+                    self.path_resolver.workspace_root().join(config_path)
+                };
+                
                 format!(
                     r#"
 [storage.local]
 path = "{}""#,
-                    local_config.path.display()
+                    absolute_path.display()
                 )
             }
             crate::config::StorageBackend::S3 => {
@@ -600,7 +634,7 @@ region = "{}"
     /// Save storage configuration to workspace config
     pub fn save_storage_config(&self, storage_config: &crate::config::StorageConfig) -> Result<()> {
         // Create/update snapbase.toml file in the workspace root
-        let toml_config_path = self.root.join("snapbase.toml");
+        let toml_config_path = self.path_resolver.workspace_config_path();
         let toml_config = crate::config::Config {
             storage: crate::config::StorageConfigToml::from_runtime(storage_config),
             snapshot: crate::config::SnapshotConfig::default(),
@@ -615,7 +649,7 @@ region = "{}"
     /// Load storage configuration from workspace config
     pub fn load_storage_config(&self) -> Result<Option<crate::config::StorageConfig>> {
         // Load from snapbase.toml in workspace root
-        let toml_config_path = self.root.join("snapbase.toml");
+        let toml_config_path = self.path_resolver.workspace_config_path();
         if toml_config_path.exists() {
             let content = fs::read_to_string(&toml_config_path)?;
             if let Ok(config) = toml::from_str::<crate::config::Config>(&content) {
@@ -652,8 +686,9 @@ region = "{}"
         let mut diff_count = 0;
         let mut total_diff_size = 0u64;
 
-        if self.diffs_dir.exists() {
-            for entry in WalkDir::new(&self.diffs_dir) {
+        let diffs_dir = self.diffs_dir();
+        if diffs_dir.exists() {
+            for entry in WalkDir::new(&diffs_dir) {
                 let entry = entry?;
                 if entry.file_type().is_file() {
                     diff_count += 1;
@@ -803,7 +838,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        assert!(workspace.snapbase_dir.exists());
+        assert!(workspace.snapbase_dir().exists());
     }
 
     #[tokio::test]

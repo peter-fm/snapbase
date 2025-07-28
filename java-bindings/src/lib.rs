@@ -480,7 +480,8 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateWorkspace
     };
 
     let path = PathBuf::from(workspace_path_str);
-    let workspace = match SnapbaseWorkspace::find_or_create(Some(&path)) {
+    // Use create_at_path for explicit workspace paths to avoid directory traversal
+    let workspace = match SnapbaseWorkspace::create_at_path(&path) {
         Ok(w) => w,
         Err(e) => {
             let _ = env.throw_new(
@@ -562,7 +563,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
     let input_path = if Path::new(&file_path_str).is_absolute() {
         PathBuf::from(&file_path_str)
     } else {
-        workspace_handle.workspace.root.join(&file_path_str)
+        workspace_handle.workspace.root().join(&file_path_str)
     };
 
     // Generate snapshot name if not provided
@@ -599,7 +600,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
         };
 
         let snapshot_config =
-            match get_snapshot_config_with_workspace(Some(&workspace_handle.workspace.root)) {
+            match get_snapshot_config_with_workspace(Some(workspace_handle.workspace.root())) {
                 Ok(config) => config,
                 Err(e) => {
                     let _ = env.throw_new(
@@ -725,7 +726,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
     let input_path = if Path::new(&file_path_str).is_absolute() {
         PathBuf::from(&file_path_str)
     } else {
-        workspace_handle.workspace.root.join(&file_path_str)
+        workspace_handle.workspace.root().join(&file_path_str)
     };
 
     // Extract source name from file path (like CLI does)
@@ -896,7 +897,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetPath<'local>
 
     let path_str = workspace_handle
         .workspace
-        .root
+        .root()
         .to_string_lossy()
         .to_string();
 
@@ -1433,7 +1434,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetConfigInfo<'
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
 
     let resolution_info = match snapbase_core::config::get_config_resolution_info(Some(
-        &workspace_handle.workspace.root,
+        workspace_handle.workspace.root(),
     )) {
         Ok(info) => info,
         Err(e) => {

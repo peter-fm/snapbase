@@ -169,25 +169,22 @@ impl SnapshotCreator {
             pb.set_message("📦 Creating snapshot...");
         }
 
-        // Determine workspace base path
-        let workspace_base = if let Some(ws) = workspace {
-            ws.snapbase_dir.clone()
+        // Create snapshot using storage backend - require workspace context
+        if let Some(ws) = workspace {
+            self.create_hive_snapshot(
+                &data_info,
+                &schema_hash,
+                &row_hashes,
+                &column_hashes,
+                name,
+                full_data,
+                &delta_from_parent,
+                &mut data_processor,
+                ws,
+            )?;
         } else {
-            // Default to current directory's .snapbase if no workspace context
-            std::env::current_dir()?.join(".snapbase")
-        };
-
-        self.create_hive_snapshot(
-            &data_info,
-            &schema_hash,
-            &row_hashes,
-            &column_hashes,
-            name,
-            full_data,
-            &delta_from_parent,
-            &mut data_processor,
-            &workspace_base,
-        )?;
+            return Err(SnapbaseError::workspace("Workspace context required for Hive snapshot creation"));
+        }
 
         // Archive creation removed - using Hive-style storage only
         let archive_size = 0; // No archive file created
@@ -240,7 +237,7 @@ impl SnapshotCreator {
     // NOTE: Removed create_delta_parquet() - delta files are redundant
     // All operations use full data.parquet files, not deltas
 
-    /// Create snapshot in Hive directory structure (replaces archive creation)
+    /// Create snapshot in Hive directory structure using storage backend
     fn create_hive_snapshot(
         &mut self,
         data_info: &DataInfo,
@@ -251,8 +248,10 @@ impl SnapshotCreator {
         full_data: bool,
         _delta_from_parent: &Option<DeltaInfo>,
         data_processor: &mut DataProcessor,
-        workspace_base: &Path,
+        workspace: &crate::workspace::SnapbaseWorkspace,
     ) -> Result<()> {
+        use crate::path_utils;
+
         // Generate timestamp for Hive partitioning
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string();
 
@@ -263,18 +262,23 @@ impl SnapshotCreator {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        // Create Hive directory structure using OS-native paths for local operations
-        // Note: This is for local filesystem operations, not storage backend operations
-        let hive_dir = workspace_base
-            .join("sources")
-            .join(source_name)
-            .join(format!("snapshot_name={name}"))
-            .join(format!("snapshot_timestamp={timestamp}"));
+        // Create Hive directory structure path using storage backend abstraction
+        let hive_path_str = path_utils::join_for_storage_backend(&[
+            "sources",
+            source_name,
+            &format!("snapshot_name={name}"),
+            &format!("snapshot_timestamp={timestamp}")
+        ], workspace.storage());
 
-        std::fs::create_dir_all(&hive_dir)?;
+        // Create async runtime for storage operations
+        let rt = tokio::runtime::Runtime::new()?;
+        
+        // Ensure directory exists using storage backend
+        rt.block_on(async {
+            workspace.storage().ensure_directory(&hive_path_str).await
+        })?;
 
         // Create metadata.json
-
         let metadata = serde_json::json!({
             "format_version": "2.0",
             "name": name,
@@ -289,18 +293,21 @@ impl SnapshotCreator {
             "source_path": data_info.source.to_string_lossy(),
         });
 
-        let metadata_path = hive_dir.join("metadata.json");
-        std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
-
-        // Note: schema.json is no longer created - schema information is stored in metadata.json
-        // and hashes are computed on-demand from the columns array
+        let metadata_path = format!("{hive_path_str}/metadata.json");
+        let metadata_bytes = serde_json::to_string_pretty(&metadata)?.as_bytes().to_vec();
+        
+        // Write metadata using storage backend
+        rt.block_on(async {
+            workspace.storage().write_file(&metadata_path, &metadata_bytes).await
+        })?;
 
         // Create data.parquet using DuckDB COPY (only if full_data is true)
         if full_data {
-            let parquet_path = hive_dir.join("data.parquet");
+            let parquet_relative_path = format!("{hive_path_str}/data.parquet");
+            let parquet_path = workspace.storage().get_duckdb_path(&parquet_relative_path);
 
             // Use DuckDB's COPY command to export directly to Parquet
-            data_processor.export_to_parquet(&parquet_path)?;
+            data_processor.export_to_parquet(std::path::Path::new(&parquet_path))?;
         }
 
         Ok(())

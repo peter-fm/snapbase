@@ -418,7 +418,24 @@ pub fn get_storage_config_with_workspace(
     }
 
     // 2. Fall back to global config → env vars → defaults
-    get_storage_config()
+    let mut config = get_storage_config()?;
+    
+    // If we have a workspace path and the config uses local storage with relative path,
+    // resolve it relative to the workspace, not current directory
+    if let Some(workspace_path) = workspace_path {
+        if let StorageConfig::Local { ref mut path } = config {
+            if path.is_relative() {
+                let relative_path = path.clone();
+                *path = workspace_path.join(relative_path);
+            } else if !path.starts_with(workspace_path) {
+                // Additional safeguard: if the path is absolute but doesn't start with workspace path,
+                // it might be a stale absolute path. For workspace isolation, force it to be within workspace.
+                *path = workspace_path.join(".snapbase");
+            }
+        }
+    }
+    
+    Ok(config)
 }
 
 impl DatabaseConfig {

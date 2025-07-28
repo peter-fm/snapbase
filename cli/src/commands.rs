@@ -136,7 +136,7 @@ fn init_command(workspace_path: Option<&Path>, from_global: bool) -> Result<()> 
 
         println!(
             "✅ Initialized snapbase workspace at: {}",
-            workspace.root.display()
+            workspace.root().display()
         );
         match workspace.config() {
             config::StorageConfig::Local { path } => {
@@ -248,10 +248,10 @@ fn validate_file_within_workspace(file_path: &Path, workspace: &SnapbaseWorkspac
         ))
     })?;
 
-    let canonical_workspace = workspace.root.canonicalize().map_err(|e| {
+    let canonical_workspace = workspace.root().canonicalize().map_err(|e| {
         SnapbaseError::invalid_input(format!(
             "Cannot access workspace root '{}': {}",
-            workspace.root.display(),
+            workspace.root().display(),
             e
         ))
     })?;
@@ -261,7 +261,7 @@ fn validate_file_within_workspace(file_path: &Path, workspace: &SnapbaseWorkspac
         return Err(SnapbaseError::invalid_input(format!(
             "File '{}' is outside the workspace directory '{}'. Only files within the workspace can be tracked.",
             file_path.display(),
-            workspace.root.display()
+            workspace.root().display()
         )));
     }
 
@@ -287,7 +287,7 @@ fn snapshot_command(workspace_path: Option<&Path>, input: &str, name: Option<&st
         })?;
 
         // Use configured pattern to generate name
-        let snapshot_config = get_snapshot_config_with_workspace(Some(&workspace.root))?;
+        let snapshot_config = get_snapshot_config_with_workspace(Some(workspace.root()))?;
         let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
         namer.generate_name(input, &existing_snapshots)?
     };
@@ -304,7 +304,7 @@ fn snapshot_command(workspace_path: Option<&Path>, input: &str, name: Option<&st
         Path::new(input).to_path_buf()
     } else {
         // Resolve relative paths relative to the workspace root
-        workspace.root.join(input)
+        workspace.root().join(input)
     };
 
     // Validate that the file is within the workspace directory
@@ -400,7 +400,7 @@ fn database_snapshot_command(
             format!("{prefix}_{table_name}")
         } else {
             // Generate name using configured pattern
-            let snapshot_config = get_snapshot_config_with_workspace(Some(&workspace.root))?;
+            let snapshot_config = get_snapshot_config_with_workspace(Some(workspace.root()))?;
             let namer = SnapshotNamer::new(snapshot_config.default_name_pattern);
             let rt = tokio::runtime::Runtime::new()?;
             let existing_snapshots = rt.block_on(async {
@@ -514,7 +514,7 @@ fn show_command(
     let source_path = if Path::new(source).is_absolute() {
         Path::new(source).to_path_buf()
     } else {
-        workspace.root.join(source)
+        workspace.root().join(source)
     };
     let canonical_source_path = source_path
         .canonicalize()
@@ -641,7 +641,7 @@ fn list_command(
                     let filter_path = if Path::new(filter).is_absolute() {
                         Path::new(filter).to_path_buf()
                     } else {
-                        workspace.root.join(filter)
+                        workspace.root().join(filter)
                     };
                     let canonical_filter = filter_path.canonicalize()
                         .unwrap_or(filter_path)
@@ -1351,7 +1351,7 @@ fn show_current_config(
             // Try to find workspace
             if let Ok(workspace) = SnapbaseWorkspace::find_or_create(None) {
                 let (storage_config, resolution_info) =
-                    config::get_storage_config_with_resolution_info(Some(&workspace.root))?;
+                    config::get_storage_config_with_resolution_info(Some(workspace.root()))?;
                 show_config_with_resolution(&storage_config, &resolution_info, show_paths);
             } else {
                 println!("⚠️  No workspace found. Use 'snapbase init' to create one or specify --workspace.");
@@ -1500,7 +1500,7 @@ fn thin_wrapper_status_command(
     let input_path = if Path::new(input).is_absolute() {
         Path::new(input).to_path_buf()
     } else {
-        workspace.root.join(input)
+        workspace.root().join(input)
     };
     let canonical_input_path = input_path.canonicalize().unwrap_or(input_path.clone());
 

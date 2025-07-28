@@ -123,10 +123,10 @@ class WorkflowTest {
         assertTrue(workspace.snapshotExists(snap2Name));
         
         // Step 6: Test export functionality (equivalent to: snapbase export employees.csv --file backup.csv --to snap2 --force)
-        testExportFunctionality(employeesFile);
+        testExportFunctionality(employeesFile, snap2Name);
         
         // Step 7: Test query functionality (equivalent to: snapbase query employees.csv "select * from data")
-        testQueryFunctionality();
+        testQueryFunctionality(snap2Name, baselineName);
         
         // Step 8: Test diff functionality (equivalent to: snapbase diff employees.csv baseline snap1, etc.)
         testDiffOperations();
@@ -134,12 +134,12 @@ class WorkflowTest {
         System.out.println("✅ Complete Java workflow test completed successfully");
     }
     
-    private void testExportFunctionality(Path employeesFile) throws IOException {
+    private void testExportFunctionality(Path employeesFile, String snapshotName) throws IOException {
         Path backupFile = tempDir.resolve("backup.csv");
         
         try {
             // Test actual export functionality
-            String exportResult = workspace.export("employees.csv", backupFile.toString(), "snap2", true);
+            String exportResult = workspace.export("employees.csv", backupFile.toString(), snapshotName, true);
             assertNotNull(exportResult);
             assertTrue(Files.exists(backupFile));
             
@@ -160,17 +160,17 @@ class WorkflowTest {
             
             // Fall back to query verification if export fails
             try (VectorSchemaRoot result = workspace.query("employees.csv", 
-                    "SELECT * FROM data WHERE snapshot_name = 'snap2'")) {
+                    "SELECT * FROM data WHERE snapshot_name = '" + snapshotName + "'")) {
                 assertNotNull(result);
                 assertTrue(result.getRowCount() > 0);
-                System.out.println("Fallback: Verified snap2 data via query");
+                System.out.println("Fallback: Verified " + snapshotName + " data via query");
             } catch (SnapbaseException queryException) {
                 System.out.println("Query fallback also failed: " + queryException.getMessage());
             }
         }
     }
     
-    private void testQueryFunctionality() throws SnapbaseException {
+    private void testQueryFunctionality(String snap2Name, String baselineName) throws SnapbaseException {
         // Test basic query (equivalent to: snapbase query employees.csv "select * from data")
         try (VectorSchemaRoot basicResult = workspace.query("employees.csv", "SELECT * FROM data")) {
             assertNotNull(basicResult);
@@ -189,16 +189,16 @@ class WorkflowTest {
         
         // Test filtered query (equivalent to: snapbase query employees.csv "select * from data where snapshot_name = 'snap2'")
         try (VectorSchemaRoot filteredResult = workspace.query("employees.csv", 
-                "SELECT * FROM data WHERE snapshot_name = 'snap2'")) {
+                "SELECT * FROM data WHERE snapshot_name = '" + snap2Name + "'")) {
             assertNotNull(filteredResult);
             // Should have fewer rows than total (only snap2 data)
             
-            System.out.println("Filtered query test: Returned " + filteredResult.getRowCount() + " rows for snap2");
+            System.out.println("Filtered query test: Returned " + filteredResult.getRowCount() + " rows for " + snap2Name);
         }
         
         // Test aggregation query
         try (VectorSchemaRoot aggResult = workspace.query("employees.csv", 
-                "SELECT department, COUNT(*) as count FROM data WHERE snapshot_name = 'baseline' GROUP BY department")) {
+                "SELECT department, COUNT(*) as count FROM data WHERE snapshot_name = '" + baselineName + "' GROUP BY department")) {
             assertNotNull(aggResult);
             assertTrue(aggResult.getRowCount() > 0);
             
