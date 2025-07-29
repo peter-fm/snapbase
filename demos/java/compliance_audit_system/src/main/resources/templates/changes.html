@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="layout :: head"></head>
+<body>
+    <nav th:replace="layout :: nav"></nav>
+    
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="mb-4">
+                    <i class="fas fa-exchange-alt text-primary"></i>
+                    Change Detection
+                </h1>
+                <p class="lead text-muted">
+                    Compare snapshots to detect and analyze data changes for compliance reporting
+                </p>
+            </div>
+        </div>
+
+        <!-- Error Display -->
+        <div th:if="${error}" class="alert alert-danger" role="alert">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span th:text="${error}"></span>
+        </div>
+
+        <!-- Snapshot Selection -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-sliders-h"></i> Compare Snapshots
+                    </div>
+                    <div class="card-body">
+                        <form method="get" action="/changes">
+                            <div class="row">
+                                <div class="col-md-5">
+                                    <label for="fromSnapshot" class="form-label">From Snapshot:</label>
+                                    <select class="form-select" id="fromSnapshot" name="from" th:value="${fromSnapshot}">
+                                        <option value="">Select baseline snapshot...</option>
+                                        <option th:each="snapshot : ${availableSnapshots}" 
+                                                th:value="${snapshot}" 
+                                                th:text="${snapshot}"
+                                                th:selected="${snapshot == fromSnapshot}"></option>
+                                    </select>
+                                </div>
+                                <div class="col-md-5">
+                                    <label for="toSnapshot" class="form-label">To Snapshot:</label>
+                                    <select class="form-select" id="toSnapshot" name="to" th:value="${toSnapshot}">
+                                        <option value="">Select comparison snapshot...</option>
+                                        <option th:each="snapshot : ${availableSnapshots}" 
+                                                th:value="${snapshot}" 
+                                                th:text="${snapshot}"
+                                                th:selected="${snapshot == toSnapshot}"></option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2 d-flex align-items-end">
+                                    <button type="submit" class="btn btn-primary w-100">
+                                        <i class="fas fa-search"></i> Compare
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Change Results -->
+        <div th:if="${changes != null}">
+            <!-- Summary -->
+            <div class="row mb-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <i class="fas fa-chart-pie"></i> Change Summary
+                        </div>
+                        <div class="card-body">
+                            <div class="row text-center">
+                                <div class="col-md-3">
+                                    <h3 class="text-info" th:text="${changes.rowChanges.totalChanges}">0</h3>
+                                    <p class="text-muted">Total Changes</p>
+                                </div>
+                                <div class="col-md-3">
+                                    <h3 class="text-success" th:text="${changes.rowChanges.added.size()}">0</h3>
+                                    <p class="text-muted">Rows Added</p>
+                                </div>
+                                <div class="col-md-3">
+                                    <h3 class="text-warning" th:text="${changes.rowChanges.modified.size()}">0</h3>
+                                    <p class="text-muted">Rows Modified</p>
+                                </div>
+                                <div class="col-md-3">
+                                    <h3 class="text-danger" th:text="${changes.rowChanges.removed.size()}">0</h3>
+                                    <p class="text-muted">Rows Removed</p>
+                                </div>
+                            </div>
+                            
+                            <div class="alert alert-info mt-3">
+                                <i class="fas fa-info-circle"></i>
+                                Comparing <strong th:text="${fromSnapshot}"></strong> → <strong th:text="${toSnapshot}"></strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schema Changes -->
+            <div class="row mb-4" th:if="${changes.schemaChanges.hasChanges()}">
+                <div class="col-12">
+                    <div class="card border-warning">
+                        <div class="card-header bg-warning text-dark">
+                            <i class="fas fa-exclamation-triangle"></i> Schema Changes Detected
+                        </div>
+                        <div class="card-body">
+                            <!-- Column Additions -->
+                            <div th:if="${!changes.schemaChanges.columnsAdded.empty}" class="mb-3">
+                                <h6 class="text-success">
+                                    <i class="fas fa-plus-circle"></i> Added Columns:
+                                </h6>
+                                <ul class="list-unstyled">
+                                    <li th:each="addition : ${changes.schemaChanges.columnsAdded}">
+                                        <span class="badge bg-success me-2">+</span>
+                                        <strong th:text="${addition.name}"></strong>
+                                        (<span th:text="${addition.dataType}"></span>)
+                                        <span th:if="${addition.nullable}" class="text-muted">nullable</span>
+                                        <span th:if="${!addition.nullable}" class="text-warning">not null</span>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            <!-- Column Removals -->
+                            <div th:if="${!changes.schemaChanges.columnsRemoved.empty}" class="mb-3">
+                                <h6 class="text-danger">
+                                    <i class="fas fa-minus-circle"></i> Removed Columns:
+                                </h6>
+                                <ul class="list-unstyled">
+                                    <li th:each="removal : ${changes.schemaChanges.columnsRemoved}">
+                                        <span class="badge bg-danger me-2">-</span>
+                                        <strong th:text="${removal.name}"></strong>
+                                        (<span th:text="${removal.dataType}"></span>)
+                                    </li>
+                                </ul>
+                            </div>
+
+                            <!-- Column Renames -->
+                            <div th:if="${!changes.schemaChanges.columnsRenamed.empty}" class="mb-3">
+                                <h6 class="text-info">
+                                    <i class="fas fa-exchange-alt"></i> Renamed Columns:
+                                </h6>
+                                <ul class="list-unstyled">
+                                    <li th:each="rename : ${changes.schemaChanges.columnsRenamed}">
+                                        <span class="badge bg-info me-2">~</span>
+                                        <strong th:text="${rename.from}"></strong> → <strong th:text="${rename.to}"></strong>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            <!-- Type Changes -->
+                            <div th:if="${!changes.schemaChanges.typeChanges.empty}">
+                                <h6 class="text-warning">
+                                    <i class="fas fa-exclamation-triangle"></i> Type Changes:
+                                </h6>
+                                <ul class="list-unstyled">
+                                    <li th:each="typeChange : ${changes.schemaChanges.typeChanges}">
+                                        <span class="badge bg-warning me-2">⚠</span>
+                                        <strong th:text="${typeChange.column}"></strong>: 
+                                        <span th:text="${typeChange.from}"></span> → <span th:text="${typeChange.to}"></span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sensitive Changes Alert -->
+            <div class="row mb-4" th:if="${sensitiveChanges != null and !sensitiveChanges.empty}">
+                <div class="col-12">
+                    <div class="card border-danger">
+                        <div class="card-header bg-danger text-white">
+                            <i class="fas fa-shield-alt"></i> Sensitive Data Changes Detected
+                            <span class="badge bg-light text-danger ms-2" th:text="${sensitiveChanges.size()} + ' changes'"></span>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <strong>Compliance Alert:</strong> Changes to sensitive PII fields have been detected and require special attention for regulatory compliance.
+                            </div>
+                            
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Row</th>
+                                            <th>Field</th>
+                                            <th>Before</th>
+                                            <th>After</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr th:each="change : ${sensitiveChanges}">
+                                            <td th:text="${change.rowIndex}"></td>
+                                            <td>
+                                                <span class="sensitive-field" th:text="${change.column}"></span>
+                                            </td>
+                                            <td>
+                                                <code th:text="${change.oldValue}"></code>
+                                            </td>
+                                            <td>
+                                                <code th:text="${change.newValue}"></code>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Row Changes Details -->
+            <div class="row" th:if="${changes.rowChanges.hasChanges()}">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <i class="fas fa-table"></i> Detailed Row Changes
+                        </div>
+                        <div class="card-body">
+                            <!-- Row Additions -->
+                            <div th:if="${!changes.rowChanges.added.empty}" class="mb-4">
+                                <h6 class="text-success">
+                                    <i class="fas fa-plus-circle"></i> Added Rows 
+                                    (<span th:text="${changes.rowChanges.added.size()}"></span>):
+                                </h6>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-striped">
+                                        <thead class="table-success">
+                                            <tr>
+                                                <th>Row Index</th>
+                                                <th>Data Preview</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr th:each="addition : ${changes.rowChanges.added}" th:if="${additionStat.index < 5}">
+                                                <td th:text="${addition.rowIndex}"></td>
+                                                <td>
+                                                    <small class="text-muted" th:text="${addition.data}"></small>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <small class="text-muted" th:if="${changes.rowChanges.added.size() > 5}">
+                                    ... and <span th:text="${changes.rowChanges.added.size() - 5}"></span> more rows
+                                </small>
+                            </div>
+
+                            <!-- Row Removals -->
+                            <div th:if="${!changes.rowChanges.removed.empty}" class="mb-4">
+                                <h6 class="text-danger">
+                                    <i class="fas fa-minus-circle"></i> Removed Rows 
+                                    (<span th:text="${changes.rowChanges.removed.size()}"></span>):
+                                </h6>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-striped">
+                                        <thead class="table-danger">
+                                            <tr>
+                                                <th>Row Index</th>
+                                                <th>Data Preview</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr th:each="removal : ${changes.rowChanges.removed}" th:if="${removalStat.index < 5}">
+                                                <td th:text="${removal.rowIndex}"></td>
+                                                <td>
+                                                    <small class="text-muted" th:text="${removal.data}"></small>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <small class="text-muted" th:if="${changes.rowChanges.removed.size() > 5}">
+                                    ... and <span th:text="${changes.rowChanges.removed.size() - 5}"></span> more rows
+                                </small>
+                            </div>
+
+                            <!-- Row Modifications -->
+                            <div th:if="${!changes.rowChanges.modified.empty}">
+                                <h6 class="text-warning">
+                                    <i class="fas fa-edit"></i> Modified Rows 
+                                    (<span th:text="${changes.rowChanges.modified.size()}"></span>):
+                                </h6>
+                                <div class="accordion" id="modificationsAccordion">
+                                    <div class="accordion-item" th:each="modification, modStat : ${changes.rowChanges.modified}" th:if="${modStat.index < 10}">
+                                        <h2 class="accordion-header" th:id="'heading' + ${modStat.index}">
+                                            <button class="accordion-button collapsed" type="button" 
+                                                    data-bs-toggle="collapse" 
+                                                    th:data-bs-target="'#collapse' + ${modStat.index}">
+                                                Row <span th:text="${modification.rowIndex}"></span> - 
+                                                <span th:text="${modification.changes.size()}"></span> field(s) changed
+                                            </button>
+                                        </h2>
+                                        <div th:id="'collapse' + ${modStat.index}" 
+                                             class="accordion-collapse collapse" 
+                                             th:data-bs-parent="'#modificationsAccordion'">
+                                            <div class="accordion-body">
+                                                <div class="table-responsive">
+                                                    <table class="table table-sm">
+                                                        <thead>
+                                                            <tr>
+                                                                <th>Field</th>
+                                                                <th>Before</th>
+                                                                <th>After</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            <tr th:each="changeEntry : ${modification.changes}">
+                                                                <td>
+                                                                    <span th:text="${changeEntry.key}" 
+                                                                          th:class="${sensitiveChanges.stream().anyMatch(sc -> sc.column == changeEntry.key) ? 'sensitive-field' : ''}"></span>
+                                                                </td>
+                                                                <td>
+                                                                    <code th:text="${changeEntry.value.before}"></code>
+                                                                </td>
+                                                                <td>
+                                                                    <code th:text="${changeEntry.value.after}"></code>
+                                                                </td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <small class="text-muted" th:if="${changes.rowChanges.modified.size() > 10}">
+                                    ... and <span th:text="${changes.rowChanges.modified.size() - 10}"></span> more modified rows
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- No Changes Message -->
+        <div th:if="${fromSnapshot != null and toSnapshot != null and changes == null}">
+            <div class="card">
+                <div class="card-body text-center py-5">
+                    <i class="fas fa-check-circle fa-4x text-success mb-3"></i>
+                    <h3 class="text-success">No Changes Detected</h3>
+                    <p class="text-muted">
+                        The snapshots <strong th:text="${fromSnapshot}"></strong> and <strong th:text="${toSnapshot}"></strong> are identical.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Instructions -->
+        <div th:if="${fromSnapshot == null and toSnapshot == null}" class="card">
+            <div class="card-body text-center py-5">
+                <i class="fas fa-info-circle fa-4x text-info mb-3"></i>
+                <h3 class="text-info">Select Snapshots to Compare</h3>
+                <p class="text-muted">
+                    Choose two snapshots from the dropdown menus above to detect and analyze changes between them.
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <footer th:replace="layout :: footer"></footer>
+    <div th:replace="layout :: scripts"></div>
+</body>
+</html>

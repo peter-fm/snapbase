@@ -6,6 +6,7 @@
 
 # Snapbase workspace
 /.snapbase
+core/.snapbase
 
 # OS files
 .DS_Store
@@ -29,3 +30,5 @@ testspace/*
 
 dist/*
 ubertest.sh
+core/.snapbase/*
+

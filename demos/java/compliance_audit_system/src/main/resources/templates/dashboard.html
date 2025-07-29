@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="layout :: head"></head>
+<body>
+    <nav th:replace="layout :: nav"></nav>
+    
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="mb-4">
+                    <i class="fas fa-shield-alt text-primary"></i>
+                    Enterprise Data Compliance Audit Dashboard
+                </h1>
+                <p class="lead text-muted">
+                    Monitor and audit customer data changes with full regulatory compliance tracking
+                </p>
+            </div>
+        </div>
+
+        <!-- Error Display -->
+        <div th:if="${error}" class="alert alert-danger" role="alert">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span th:text="${error}"></span>
+        </div>
+
+        <!-- Demo Control -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-play-circle"></i> Demo Control
+                    </div>
+                    <div class="card-body">
+                        <div th:if="${!dataExists}" class="alert alert-info">
+                            <i class="fas fa-info-circle"></i>
+                            No demo data found. Click "Run Demo" to generate sample customer data and demonstrate compliance tracking.
+                        </div>
+                        <button type="button" class="btn btn-demo btn-lg" onclick="runDemo()">
+                            <i class="fas fa-play"></i> Run Compliance Demo
+                        </button>
+                        <div id="demo-status" class="mt-3"></div>
+                        <div class="mt-3">
+                            <small class="text-muted">
+                                The demo will create sample customer data, simulate data changes, and demonstrate:
+                                <ul class="mt-2">
+                                    <li>Snapshot-based data versioning</li>
+                                    <li>Cell-level change detection for PII fields</li>
+                                    <li>Compliance audit trails</li>
+                                    <li>Temporal data queries</li>
+                                    <li>Export capabilities for regulators</li>
+                                </ul>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Statistics Overview -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-primary" th:text="${totalSnapshots ?: 0}">0</h2>
+                        <p class="card-text">Total Snapshots</p>
+                        <i class="fas fa-camera fa-2x text-muted"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-success" th:text="${totalRecords ?: 'N/A'}">N/A</h2>
+                        <p class="card-text">Customer Records</p>
+                        <i class="fas fa-users fa-2x text-muted"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-warning">5</h2>
+                        <p class="card-text">Sensitive Fields</p>
+                        <i class="fas fa-lock fa-2x text-muted"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h2 class="text-info">100%</h2>
+                        <p class="card-text">Audit Coverage</p>
+                        <i class="fas fa-clipboard-check fa-2x text-muted"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Snapshots -->
+        <div class="row mb-4" th:if="${snapshots != null and !snapshots.empty}">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-camera"></i> Recent Snapshots
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Snapshot Name</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr th:each="snapshot : ${snapshots}">
+                                        <td>
+                                            <code th:text="${snapshot}"></code>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-success status-badge">
+                                                <i class="fas fa-check"></i> Active
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <a th:href="@{/changes(from=${snapshot})}" class="btn btn-sm btn-outline-primary">
+                                                <i class="fas fa-exchange-alt"></i> View Changes
+                                            </a>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="mt-3">
+                            <a href="/snapshots" class="btn btn-primary">
+                                <i class="fas fa-list"></i> View All Snapshots
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compliance Features -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-shield-alt"></i> Compliance Features
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-unstyled">
+                            <li class="mb-2">
+                                <i class="fas fa-check-circle text-success"></i>
+                                <strong>GDPR Compliance:</strong> Complete data lineage and change tracking
+                            </li>
+                            <li class="mb-2">
+                                <i class="fas fa-check-circle text-success"></i>
+                                <strong>HIPAA Compliance:</strong> Complete audit trail of PHI access
+                            </li>
+                            <li class="mb-2">
+                                <i class="fas fa-check-circle text-success"></i>
+                                <strong>SOX Compliance:</strong> Financial data change documentation
+                            </li>
+                            <li class="mb-2">
+                                <i class="fas fa-check-circle text-success"></i>
+                                <strong>PCI DSS:</strong> Payment data handling audit
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-database"></i> Snapbase Advantages
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-unstyled">
+                            <li class="mb-2">
+                                <i class="fas fa-bolt text-warning"></i>
+                                <strong>Cell-level tracking:</strong> Track every individual data change
+                            </li>
+                            <li class="mb-2">
+                                <i class="fas fa-history text-info"></i>
+                                <strong>Temporal queries:</strong> SQL across time for trend analysis
+                            </li>
+                            <li class="mb-2">
+                                <i class="fas fa-lock text-danger"></i>
+                                <strong>Immutable snapshots:</strong> Tamper-proof audit evidence
+                            </li>
+                            <li class="mb-2">
+                                <i class="fas fa-download text-primary"></i>
+                                <strong>Export capabilities:</strong> Generate reports for regulators
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            function runDemo() {
+                const statusDiv = document.getElementById('demo-status');
+                statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin"></i> Starting demo... Check the console for progress.</div>';
+                
+                fetch('/api/run-demo', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'running') {
+                        statusDiv.innerHTML = `
+                            <div class="alert alert-success">
+                                <i class="fas fa-play"></i> ${data.message}
+                                <br><small>The demo is running in the background. Refresh this page after a few seconds to see the results.</small>
+                                <br><button class="btn btn-sm btn-primary mt-2" onclick="location.reload()">Refresh Page</button>
+                            </div>
+                        `;
+                    } else {
+                        statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> ${data.error}</div>`;
+                    }
+                })
+                .catch(error => {
+                    statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> Error: ${error.message}</div>`;
+                });
+            }
+        </script>
+    </div>
+    
+    <footer th:replace="layout :: footer"></footer>
+    <div th:replace="layout :: scripts"></div>
+</body>
+</html>

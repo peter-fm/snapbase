@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="layout :: head"></head>
+<body>
+    <nav th:replace="layout :: nav"></nav>
+    
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="mb-4">
+                    <i class="fas fa-camera text-primary"></i>
+                    Data Snapshots
+                </h1>
+                <p class="lead text-muted">
+                    View all data snapshots created for compliance tracking and audit purposes
+                </p>
+            </div>
+        </div>
+
+        <!-- Error Display -->
+        <div th:if="${error}" class="alert alert-danger" role="alert">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span th:text="${error}"></span>
+        </div>
+
+        <!-- Snapshots List -->
+        <div class="row" th:if="${snapshots != null and !snapshots.empty}">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>
+                            <i class="fas fa-list"></i> All Snapshots
+                        </span>
+                        <span class="badge bg-primary" th:text="${snapshots.size()} + ' snapshots'">0 snapshots</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>Snapshot Name</th>
+                                        <th>Record Count</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr th:each="snapshot : ${snapshots}">
+                                        <td>
+                                            <code th:text="${snapshot.name}"></code>
+                                            <br>
+                                            <small class="text-muted" th:if="${snapshot.name.contains('baseline')}">
+                                                <i class="fas fa-star text-warning"></i> Baseline Snapshot
+                                            </small>
+                                            <small class="text-muted" th:if="${snapshot.name.contains('sensitive')}">
+                                                <i class="fas fa-exclamation-triangle text-danger"></i> Contains Sensitive Changes
+                                            </small>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-success">Available</span>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-success">
+                                                <i class="fas fa-check"></i> Active
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <a th:href="@{/changes(from=${snapshot.name})}" 
+                                                   class="btn btn-outline-primary" title="View changes from this snapshot">
+                                                    <i class="fas fa-exchange-alt"></i>
+                                                </a>
+                                                <a th:href="@{/query}" 
+                                                   class="btn btn-outline-secondary" title="Query this snapshot">
+                                                    <i class="fas fa-search"></i>
+                                                </a>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- No Snapshots Message -->
+        <div class="row" th:if="${snapshots == null or snapshots.empty}">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body text-center py-5">
+                        <i class="fas fa-camera fa-4x text-muted mb-3"></i>
+                        <h3 class="text-muted">No Snapshots Found</h3>
+                        <p class="text-muted mb-4">
+                            No data snapshots have been created yet. Run the demo from the dashboard to generate sample snapshots.
+                        </p>
+                        <a href="/" class="btn btn-primary">
+                            <i class="fas fa-home"></i> Go to Dashboard
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Snapshot Information -->
+        <div class="row mt-4" th:if="${snapshots != null and !snapshots.empty}">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-info-circle"></i> About Snapshots
+                    </div>
+                    <div class="card-body">
+                        <p>Snapshots in Snapbase are immutable point-in-time captures of your data that provide:</p>
+                        <ul>
+                            <li><strong>Compliance:</strong> Tamper-proof audit evidence</li>
+                            <li><strong>Change Tracking:</strong> Cell-level change detection</li>
+                            <li><strong>Temporal Queries:</strong> SQL across time periods</li>
+                            <li><strong>Rollback:</strong> Restore data to previous states</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-chart-bar"></i> Snapshot Statistics
+                    </div>
+                    <div class="card-body">
+                        <div class="row text-center">
+                            <div class="col-6">
+                                <h4 class="text-primary" th:text="${snapshots.size()}">0</h4>
+                                <small class="text-muted">Total Snapshots</small>
+                            </div>
+                            <div class="col-6">
+                                <h4 class="text-success">Available</h4>
+                                <small class="text-muted">Status</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <footer th:replace="layout :: footer"></footer>
+    <div th:replace="layout :: scripts"></div>
+</body>
+</html>

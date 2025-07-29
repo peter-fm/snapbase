@@ -6,4 +6,5 @@
 *.temp
 
 # Ignore compressed snapshot archives
-.snapbase/*.snapbase
+
+.snapbase/*

@@ -11,7 +11,7 @@ dependencies = [
     "scipy>=1.11.0",
     "plotly>=5.15.0",
     "pandas>=2.0.0",
-    "snapbase>=0.1.2",
+    "snapbase",
 ]
 
 [tool.uv.sources]

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="layout :: head"></head>
+<body>
+    <nav th:replace="layout :: nav"></nav>
+    
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="mb-4">
+                    <i class="fas fa-search text-primary"></i>
+                    Query Interface
+                </h1>
+                <p class="lead text-muted">
+                    Execute SQL queries against your customer data snapshots for compliance analysis
+                </p>
+            </div>
+        </div>
+
+        <!-- Sample Queries -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-lightbulb"></i> Sample Queries
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted mb-3">Click on any query below to populate the editor:</p>
+                        <div class="row">
+                            <div class="col-md-6" th:each="query : ${sampleQueries}">
+                                <div class="card mb-2">
+                                    <div class="card-body py-2">
+                                        <code class="sample-query" style="cursor: pointer;" 
+                                              th:text="${query}" onclick="setQuery(this.textContent)"></code>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Additional compliance-focused queries -->
+                        <div class="mt-4">
+                            <h6>Compliance-Focused Queries:</h6>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="card mb-2">
+                                        <div class="card-body py-2">
+                                            <code class="sample-query" style="cursor: pointer;" 
+                                                  onclick="setQuery(this.textContent)">
+                                                SELECT COUNT(*) as customers_with_pii FROM data WHERE ssn IS NOT NULL
+                                            </code>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card mb-2">
+                                        <div class="card-body py-2">
+                                            <code class="sample-query" style="cursor: pointer;" 
+                                                  onclick="setQuery(this.textContent)">
+                                                SELECT snapshot_name, AVG(credit_score) as avg_score FROM data GROUP BY snapshot_name
+                                            </code>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card mb-2">
+                                        <div class="card-body py-2">
+                                            <code class="sample-query" style="cursor: pointer;" 
+                                                  onclick="setQuery(this.textContent)">
+                                                SELECT id, first_name, last_name FROM data WHERE annual_income > 100000 LIMIT 10
+                                            </code>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card mb-2">
+                                        <div class="card-body py-2">
+                                            <code class="sample-query" style="cursor: pointer;" 
+                                                  onclick="setQuery(this.textContent)">
+                                                SELECT COUNT(DISTINCT id) as unique_customers, snapshot_name FROM data GROUP BY snapshot_name
+                                            </code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+                <!-- Query Interface -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-code"></i> SQL Query Editor
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="sqlQuery" class="form-label">SQL Query:</label>
+                            <textarea class="form-control font-monospace" id="sqlQuery" rows="6" 
+                                placeholder="SELECT * FROM data WHERE ..."></textarea>
+                        </div>
+                        <div class="d-flex gap-2 mb-3">
+                            <button type="button" class="btn btn-primary" onclick="executeQuery()">
+                                <i class="fas fa-play"></i> Execute Query
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="clearQuery()">
+                                <i class="fas fa-eraser"></i> Clear
+                            </button>
+                        </div>
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle"></i>
+                            <strong>Note:</strong> Sensitive fields (SSN, email, phone) are automatically masked in query results for security.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Query Results -->
+        <div id="queryResults" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <i class="fas fa-table"></i> Query Results
+                </div>
+                <div class="card-body">
+                    <div id="resultsContent"></div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            function setQuery(query) {
+                document.getElementById('sqlQuery').value = query.trim();
+            }
+            
+            function clearQuery() {
+                document.getElementById('sqlQuery').value = '';
+                document.getElementById('queryResults').style.display = 'none';
+            }
+            
+            function executeQuery() {
+                const query = document.getElementById('sqlQuery').value.trim();
+                if (!query) {
+                    alert('Please enter a SQL query');
+                    return;
+                }
+                
+                const resultsDiv = document.getElementById('queryResults');
+                const contentDiv = document.getElementById('resultsContent');
+                
+                resultsDiv.style.display = 'block';
+                contentDiv.innerHTML = '<div class="text-center"><i class="fas fa-spinner fa-spin"></i> Executing query...</div>';
+                
+                fetch('/api/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ sql: query })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        contentDiv.innerHTML = `
+                            <div class="alert alert-danger">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <strong>Query Error:</strong> ${data.error}
+                            </div>
+                        `;
+                        return;
+                    }
+                    
+                    let html = `
+                        <div class="mb-3">
+                            <span class="badge bg-success">
+                                <i class="fas fa-check"></i> ${data.rowCount} rows returned
+                            </span>
+                            ${data.truncated ? '<span class="badge bg-warning ms-2">Results limited to first 100 rows</span>' : ''}
+                        </div>
+                    `;
+                    
+                    if (data.data && data.data.length > 0) {
+                        html += '<div class="table-responsive"><table class="table table-striped table-sm">';
+                        
+                        // Header
+                        html += '<thead class="table-dark"><tr>';
+                        data.columns.forEach(col => {
+                            html += `<th>${col}</th>`;
+                        });
+                        html += '</tr></thead>';
+                        
+                        // Data rows
+                        html += '<tbody>';
+                        data.data.forEach(row => {
+                            html += '<tr>';
+                            data.columns.forEach(col => {
+                                const value = row[col];
+                                const displayValue = value === null ? '<em class="text-muted">null</em>' : value;
+                                html += `<td>${displayValue}</td>`;
+                            });
+                            html += '</tr>';
+                        });
+                        html += '</tbody></table></div>';
+                    } else {
+                        html += '<div class="alert alert-info">No data returned by query.</div>';
+                    }
+                    
+                    contentDiv.innerHTML = html;
+                })
+                .catch(error => {
+                    contentDiv.innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <strong>Request Error:</strong> ${error.message}
+                        </div>
+                    `;
+                });
+            }
+            
+            // Allow Ctrl+Enter to execute query
+            document.getElementById('sqlQuery').addEventListener('keydown', function(event) {
+                if (event.ctrlKey && event.key === 'Enter') {
+                    executeQuery();
+                }
+            });
+        </script>
+    </div>
+    
+    <footer th:replace="layout :: footer"></footer>
+    <div th:replace="layout :: scripts"></div>
+</body>
+</html>
