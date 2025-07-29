@@ -11,7 +11,7 @@ use snapbase_core::error::{Result, SnapbaseError};
 use snapbase_core::export::{ExportFormat, ExportOptions, UnifiedExporter};
 use snapbase_core::naming::SnapshotNamer;
 use snapbase_core::path_utils;
-use snapbase_core::query::{QueryResult, QueryValue};
+use snapbase_core::query::{execute_query_with_describe, QueryResult, QueryValue};
 use snapbase_core::resolver::{SnapshotRef, SnapshotResolver};
 use snapbase_core::snapshot;
 use snapbase_core::sql;
@@ -94,13 +94,15 @@ pub fn execute_command(command: Commands, workspace_path: Option<&Path>) -> Resu
             format,
             limit,
             list_snapshots,
+            snapshot,
         } => query_command(
             workspace_path,
-            &source,
+            source.as_deref(),
             query.as_deref(),
             &format,
             limit,
             list_snapshots,
+            &snapshot,
         ),
 
         crate::cli::Commands::Config { command } => config_command(workspace_path, &command),
@@ -830,11 +832,12 @@ fn cleanup_command(
 /// Query historical snapshots using SQL
 fn query_command(
     workspace_path: Option<&Path>,
-    source: &str,
+    source: Option<&str>,
     sql: Option<&str>,
     format: &str,
     limit: Option<usize>,
     list_snapshots: bool,
+    snapshot_pattern: &str,
 ) -> Result<()> {
     use snapbase_core::query::SnapshotQueryEngine;
 
@@ -843,43 +846,150 @@ fn query_command(
     // Create DuckDB connection configured for the workspace storage backend
     let connection = snapbase_core::query_engine::create_configured_connection(&workspace)?;
 
-    // Register the Hive view for the source
-    snapbase_core::query_engine::register_hive_view(&connection, &workspace, source, "data")?;
+    match source {
+        Some(source_file) => {
+            // Single-source query (existing behavior)
+            
+            // Handle list snapshots request for specific source
+            if list_snapshots {
+                let query_engine = SnapshotQueryEngine::new(workspace)?;
+                let snapshots = query_engine.list_snapshots(source_file)?;
+                println!("📊 Available snapshots for '{source_file}':");
+                if snapshots.is_empty() {
+                    println!("   No snapshots found.");
+                } else {
+                    for snapshot in snapshots {
+                        println!(
+                            "  {} - {}",
+                            snapshot.name,
+                            snapshot.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+                    }
+                }
+                return Ok(());
+            }
 
-    let mut query_engine = SnapshotQueryEngine::new(workspace)?;
+            // Use the exact same logic as workspace queries but for a single source
+            // This ensures consistent behavior between single-source and workspace-wide queries
+            let registered_views = snapbase_core::query_engine::register_workspace_source_views(
+                &connection,
+                &workspace,
+                snapshot_pattern,
+            )?;
+            
+            // Check if our specific source was registered
+            let source_view_name = if registered_views.contains_key(source_file) {
+                "data" // Create a 'data' view that matches our source
+            } else {
+                return Err(SnapbaseError::SnapshotNotFound {
+                    name: format!("No snapshots found for source: {source_file}"),
+                });
+            };
+            
+            // Find the registered view for our source and create a 'data' alias
+            let sanitized_source_name = snapbase_core::query_engine::sanitize_view_name(source_file);
+            if let Some(_view_name) = registered_views.get(source_file) {
+                connection.execute(
+                    &format!("CREATE OR REPLACE VIEW data AS SELECT * FROM {sanitized_source_name}"),
+                    [],
+                )?;
+                log::debug!("Created 'data' view alias for source '{source_file}' with pattern '{snapshot_pattern}'");
+            }
 
-    // Handle list snapshots request
-    if list_snapshots {
-        let snapshots = query_engine.list_snapshots(source)?;
-        println!("📊 Available snapshots for '{source}':");
-        if snapshots.is_empty() {
-            println!("   No snapshots found.");
-        } else {
-            for snapshot in snapshots {
-                println!(
-                    "  {} - {}",
-                    snapshot.name,
-                    snapshot.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
-                );
+            // Execute the query
+            let sql_str = sql.unwrap_or("SELECT * FROM data");
+            let mut final_sql = sql_str.to_string();
+            if let Some(limit_value) = limit {
+                final_sql = format!("{final_sql} LIMIT {limit_value}");
+            }
+
+            // Execute query directly using DuckDB connection
+            let mut stmt = connection.prepare(&final_sql)?;
+            let query_result = stmt.query_arrow([])?;
+            
+            // Convert Arrow result to our QueryResult format for consistent output
+            let record_batches: Vec<_> = query_result.collect();
+            if record_batches.is_empty() {
+                println!("No results found.");
+                return Ok(());
+            }
+
+            // For simplicity, use the existing query engine for output formatting
+            let mut query_engine = SnapshotQueryEngine::new(workspace)?;
+            let result = query_engine.query(source_file, &final_sql)?;
+            
+            // Output results in requested format
+            match format {
+                "json" => print_json_result(&result)?,
+                "csv" => print_csv_result(&result)?,
+                _ => print_table_result(&result)?,
             }
         }
-        return Ok(());
-    }
+        None => {
+            // Workspace-wide query (new functionality)
+            
+            if list_snapshots {
+                // List all snapshots across all sources
+                let rt = tokio::runtime::Runtime::new()?;
+                let all_snapshots = rt.block_on(async {
+                    workspace.storage().list_snapshots_for_all_sources().await
+                })?;
+                
+                println!("📊 Available snapshots across workspace:");
+                if all_snapshots.is_empty() {
+                    println!("   No snapshots found.");
+                } else {
+                    for (source_name, snapshots) in all_snapshots {
+                        println!("📁 {source_name}:");
+                        for snapshot in snapshots {
+                            println!("   └─ {snapshot}");
+                        }
+                    }
+                }
+                return Ok(());
+            }
 
-    // Execute the query
-    let sql_str = sql.unwrap_or("SELECT * FROM data");
-    let mut final_sql = sql_str.to_string();
-    if let Some(limit_value) = limit {
-        final_sql = format!("{final_sql} LIMIT {limit_value}");
-    }
+            // Register workspace-wide views
+            let registered_views = snapbase_core::query_engine::register_workspace_source_views(
+                &connection,
+                &workspace,
+                snapshot_pattern,
+            )?;
 
-    let result = query_engine.query(source, &final_sql)?;
+            if registered_views.is_empty() {
+                println!("⚠️  No sources found in workspace.");
+                return Ok(());
+            }
 
-    // Output results in requested format
-    match format {
-        "json" => print_json_result(&result)?,
-        "csv" => print_csv_result(&result)?,
-        _ => print_table_result(&result)?,
+            // Show available views to user
+            println!("🔍 Registered views for workspace query:");
+            for (source, view_name) in &registered_views {
+                println!("   • {view_name} (from {source})");
+            }
+            println!();
+
+            // Execute workspace-wide query
+            let sql_str = sql.ok_or_else(|| {
+                SnapbaseError::invalid_input(
+                    "SQL query is required for workspace-wide queries".to_string()
+                )
+            })?;
+
+            let mut final_sql = sql_str.to_string();
+            if let Some(limit_value) = limit {
+                final_sql = format!("{final_sql} LIMIT {limit_value}");
+            }
+
+            // Use the shared helper function for consistent query execution
+            let result = execute_query_with_describe(&connection, &final_sql)?;
+
+            // Output results using existing formatters
+            match format {
+                "json" => print_json_result(&result)?,
+                "csv" => print_csv_result(&result)?,
+                _ => print_table_result(&result)?,
+            }
+        }
     }
 
     Ok(())

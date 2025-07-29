@@ -13,7 +13,8 @@ use snapbase_core::{
     change_detection::StreamingChangeDetector,
     resolver::SnapshotResolver,
     snapshot::SnapshotMetadata,
-    query::SnapshotQueryEngine,
+    query::{SnapshotQueryEngine, execute_query_with_describe},
+    query_engine::{create_configured_connection, register_workspace_source_views},
     naming::SnapshotNamer,
     config::get_snapshot_config_with_workspace,
     UnifiedExporter, ExportOptions, ExportFormat,
@@ -187,6 +188,170 @@ impl Workspace {
             // Convert PyArrow RecordBatch to Polars DataFrame using from_arrow
             let polars_df = polars.call_method1("from_arrow", (pyarrow_batch,))?;
             
+            Ok(polars_df.into())
+        })
+    }
+
+    /// Query across all workspace sources using SQL, returning Polars DataFrame
+    /// This enables cross-source joins and snapshot filtering
+    #[pyo3(signature = (sql, snapshot_pattern="*", limit=None))]
+    fn workspace_query(&self, sql: &str, snapshot_pattern: Option<&str>, limit: Option<usize>) -> PyResult<PyObject> {
+        // Create DuckDB connection configured for the workspace storage backend
+        let connection = create_configured_connection(&self.workspace)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create connection: {}", e)))?;
+
+        // Use default pattern if not provided
+        let pattern = snapshot_pattern.unwrap_or("*");
+
+        // Register workspace-wide views
+        let registered_views = register_workspace_source_views(&connection, &self.workspace, pattern)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to register workspace views: {}", e)))?;
+
+        if registered_views.is_empty() {
+            return Err(PyRuntimeError::new_err("No sources found in workspace"));
+        }
+
+        // Apply limit if specified
+        let mut final_sql = sql.to_string();
+        if let Some(limit_value) = limit {
+            final_sql = format!("{final_sql} LIMIT {limit_value}");
+        }
+
+        // Execute query using the shared helper function
+        let result = execute_query_with_describe(&connection, &final_sql)
+            .map_err(|e| PyRuntimeError::new_err(format!("Workspace query failed: {}", e)))?;
+
+        // Convert QueryResult to Arrow RecordBatch for Python consumption
+        use arrow::array::{Array, ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        // Build schema from column names
+        let fields: Vec<Field> = result.columns.iter()
+            .map(|name| Field::new(name, DataType::Utf8, true)) // Use string for all columns for simplicity
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+
+        // Convert QueryResult rows to Arrow arrays
+        let mut column_builders: Vec<Vec<Option<String>>> = vec![vec![]; result.columns.len()];
+        
+        for row in &result.rows {
+            for (col_idx, value) in row.iter().enumerate() {
+                let string_value = match value {
+                    snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
+                    snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
+                    snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
+                    snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
+                    snapbase_core::query::QueryValue::Null => None,
+                };
+                column_builders[col_idx].push(string_value);
+            }
+        }
+
+        // Build Arrow arrays
+        let arrays: Vec<ArrayRef> = column_builders.into_iter()
+            .map(|column_data| {
+                Arc::new(StringArray::from(column_data)) as ArrayRef
+            })
+            .collect();
+
+        let arrow_result = RecordBatch::try_new(schema, arrays)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create Arrow batch: {}", e)))?;
+
+        // Convert Arrow RecordBatch to PyArrow, then to Polars DataFrame
+        Python::with_gil(|py| {
+            // Create PyRecordBatch and convert to PyArrow
+            let py_record_batch = PyRecordBatch::new(arrow_result);
+            let pyarrow_batch = py_record_batch.to_pyarrow(py)?;
+            
+            // Import polars module
+            let polars = py.import("polars")?;
+            
+            // Convert PyArrow RecordBatch to Polars DataFrame using from_arrow
+            let polars_df = polars.call_method1("from_arrow", (pyarrow_batch,))?;
+            
+            Ok(polars_df.into())
+        })
+    }
+
+    /// Enhanced query method with snapshot filtering support
+    #[pyo3(signature = (source, sql, snapshot_pattern="*", limit=None))]
+    fn query_with_snapshots(&self, source: &str, sql: &str, snapshot_pattern: Option<&str>, limit: Option<usize>) -> PyResult<PyObject> {
+        // Create DuckDB connection configured for the workspace storage backend
+        let connection = create_configured_connection(&self.workspace)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create connection: {}", e)))?;
+
+        // Use default pattern if not provided
+        let pattern = snapshot_pattern.unwrap_or("*");
+
+        // Build filtered query path using snapshot pattern
+        let query_path = snapbase_core::query_engine::build_snapshot_path_pattern(&self.workspace, source, pattern)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to build snapshot path pattern: {}", e)))?;
+        
+        // Register single source view with snapshot filtering
+        connection.execute(
+            &format!(
+                "CREATE OR REPLACE VIEW data AS SELECT * 
+                 FROM read_parquet('{query_path}', hive_partitioning=true, union_by_name=true)"
+            ),
+            [],
+        ).map_err(|e| PyRuntimeError::new_err(format!("Failed to register filtered view: {}", e)))?;
+
+        // Apply limit if specified
+        let mut final_sql = sql.to_string();
+        if let Some(limit_value) = limit {
+            final_sql = format!("{final_sql} LIMIT {limit_value}");
+        }
+
+        // Execute query using the shared helper function
+        let result = execute_query_with_describe(&connection, &final_sql)
+            .map_err(|e| PyRuntimeError::new_err(format!("Query with snapshots failed: {}", e)))?;
+
+        // Convert QueryResult to Arrow RecordBatch (same logic as workspace_query)
+        use arrow::array::{Array, ArrayRef, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        // Build schema from column names
+        let fields: Vec<Field> = result.columns.iter()
+            .map(|name| Field::new(name, DataType::Utf8, true))
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+
+        // Convert QueryResult rows to Arrow arrays
+        let mut column_builders: Vec<Vec<Option<String>>> = vec![vec![]; result.columns.len()];
+        
+        for row in &result.rows {
+            for (col_idx, value) in row.iter().enumerate() {
+                let string_value = match value {
+                    snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
+                    snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
+                    snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
+                    snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
+                    snapbase_core::query::QueryValue::Null => None,
+                };
+                column_builders[col_idx].push(string_value);
+            }
+        }
+
+        // Build Arrow arrays
+        let arrays: Vec<ArrayRef> = column_builders.into_iter()
+            .map(|column_data| {
+                Arc::new(StringArray::from(column_data)) as ArrayRef
+            })
+            .collect();
+
+        let arrow_result = RecordBatch::try_new(schema, arrays)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create Arrow batch: {}", e)))?;
+
+        // Convert to Polars DataFrame
+        Python::with_gil(|py| {
+            let py_record_batch = PyRecordBatch::new(arrow_result);
+            let pyarrow_batch = py_record_batch.to_pyarrow(py)?;
+            let polars = py.import("polars")?;
+            let polars_df = polars.call_method1("from_arrow", (pyarrow_batch,))?;
             Ok(polars_df.into())
         })
     }

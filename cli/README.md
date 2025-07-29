@@ -64,6 +64,8 @@ snapbase init
 
 This creates a `.snapbase/` directory in your current folder to store snapshots and configuration.
 
+**⚠️ New in this version**: Single-source queries now require the `--source` parameter. Queries without `--source` are treated as workspace-wide cross-source queries.
+
 ### 2. Create your first snapshot
 
 ```bash
@@ -172,27 +174,45 @@ snapbase export data.csv --to snapshot1 --file existing.csv --force
 ```
 
 #### Query historical data
+
+**Cross-Snapshot Queries** - Query across multiple sources with joins and snapshot filtering:
+
 ```bash
-# Basic queries
-snapbase query data.csv "SELECT * FROM data WHERE price > 20"
-snapbase query data.csv "SELECT * FROM data" --format csv
-snapbase query data.csv --list-snapshots
+# Cross-source workspace queries (sources mounted as views)
+snapbase query "SELECT * FROM orders_csv o JOIN users_csv u ON u.id = o.user_id" --snapshot "*_v1"
+snapbase query "SELECT COUNT(*) as total_orders, snapshot_name FROM orders_csv GROUP BY snapshot_name"
+
+# Snapshot filtering patterns
+snapbase query "SELECT * FROM orders_csv" --snapshot "*_v1"      # All snapshots ending with "_v1"
+snapbase query "SELECT * FROM orders_csv" --snapshot "latest"    # Latest snapshot only
+snapbase query "SELECT * FROM orders_csv" --snapshot "orders_1"  # Specific snapshot name
+snapbase query "SELECT * FROM orders_csv"                        # All snapshots (default: "*")
+```
+
+**Single-Source Queries** - Query individual files with snapshot filtering:
+
+```bash
+# Single-source queries (requires --source parameter)
+snapbase query --source data.csv "SELECT * FROM data WHERE price > 20"
+snapbase query --source data.csv "SELECT * FROM data" --format csv
+snapbase query --source data.csv "SELECT * FROM data WHERE user_id = 101" --snapshot "*_v1"
+snapbase query --source data.csv --list-snapshots
 
 # Compare snapshots (see Examples section for detailed patterns)
-snapbase query data.csv "
+snapbase query --source data.csv "
   SELECT * FROM data 
   WHERE id NOT IN (SELECT id FROM data WHERE snapshot_name = 'v1_0')
 " # Find new records
 
 # Query specific snapshots
-snapbase query data.csv "
+snapbase query --source data.csv "
   SELECT COUNT(*) as total_records,
          AVG(price) as avg_price
   FROM data WHERE snapshot_name = 'v1_0'
 "
 
 # Query how a product price has changed over time
-snapbase query data.csv "
+snapbase query --source data.csv "
   SELECT distinct product, price,
   FROM data WHERE snapshot_timestamp >= '2024-01-1' and snapshot_timestamp < '2025-01-01'
 "
@@ -604,7 +624,99 @@ Output:
 📊 Row Changes: 1,234 rows modified (column additions)
 ```
 
-### Example 6: Export and Restore Workflow
+### Example 6: Cross-Snapshot Query Analysis (New!)
+
+**Setup multiple data sources:**
+```bash
+# Initialize workspace and create snapshots
+snapbase init
+
+# Create snapshots for different data sources
+snapbase snapshot orders.csv --name orders_v1
+snapbase snapshot users.csv --name users_v1
+snapbase snapshot products.csv --name products_v1
+```
+
+**Cross-source queries with joins:**
+```bash
+# Join orders and users data across snapshots
+snapbase query "
+  SELECT o.id, o.product, o.amount, u.name, u.department
+  FROM orders_csv o 
+  JOIN users_csv u ON u.id = o.user_id
+  WHERE o.amount > 50
+" --snapshot "*_v1"
+
+# Aggregate data across multiple sources
+snapbase query "
+  SELECT 
+    u.department,
+    COUNT(o.id) as total_orders,
+    SUM(CAST(o.amount AS DOUBLE)) as total_revenue,
+    AVG(CAST(o.amount AS DOUBLE)) as avg_order_value
+  FROM orders_csv o
+  JOIN users_csv u ON u.id = o.user_id
+  GROUP BY u.department
+  ORDER BY total_revenue DESC
+"
+
+# Track changes across snapshots in workspace
+snapbase query "
+  SELECT 
+    snapshot_name,
+    COUNT(*) as record_count,
+    AVG(CAST(amount AS DOUBLE)) as avg_amount
+  FROM orders_csv 
+  GROUP BY snapshot_name
+  ORDER BY snapshot_name
+"
+```
+
+**Snapshot filtering examples:**
+```bash
+# Query only latest snapshots
+snapbase query "SELECT COUNT(*) FROM orders_csv" --snapshot "latest"
+
+# Query all snapshots from a specific version pattern
+snapbase query "SELECT COUNT(*) FROM orders_csv" --snapshot "*_v1"
+
+# Query a specific snapshot by name
+snapbase query "SELECT * FROM orders_csv WHERE amount > 100" --snapshot "orders_v1"
+
+# Compare data between snapshot patterns
+snapbase query "
+  SELECT 
+    snapshot_name,
+    COUNT(*) as orders,
+    SUM(CAST(amount AS DOUBLE)) as total
+  FROM orders_csv 
+  WHERE snapshot_name LIKE '%_v1' OR snapshot_name LIKE '%_v2'
+  GROUP BY snapshot_name
+" --snapshot "*"
+```
+
+**Single-source queries with filtering:**
+```bash
+# Filter specific snapshots for a single source
+snapbase query --source orders.csv "
+  SELECT product, COUNT(*) as count
+  FROM data
+  WHERE snapshot_name = 'orders_v1'
+  GROUP BY product
+" --snapshot "*_v1"
+
+# Time-based analysis for a single source
+snapbase query --source orders.csv "
+  SELECT 
+    DATE(snapshot_timestamp) as date,
+    COUNT(*) as daily_orders
+  FROM data
+  GROUP BY DATE(snapshot_timestamp)
+  ORDER BY date
+"
+```
+
+### Example 7: Export and Restore Workflow
 
 ```bash
 # Export a snapshot to CSV for manual review

@@ -134,7 +134,7 @@ summary = df.group_by("category").agg([
 ])
 print(summary)
 
-# Query across multiple snapshots
+# Query across multiple snapshots for a single source
 results = workspace.query("data.csv", """
     SELECT 
         snapshot_name,
@@ -340,10 +340,10 @@ if schema_changes.has_changes() or row_changes.has_changes():
 ```
 
 ##### `query(file_path: str, sql: str, limit: int = None) -> polars.DataFrame`
-Execute SQL query against historical snapshots.
+Execute SQL query against historical snapshots for a single source.
 
 **Parameters:**
-- `file_path`: Path to the file to query
+- `file_path`: Path to the source file
 - `sql`: SQL query to execute
 - `limit`: Optional limit on number of rows returned
 
@@ -354,6 +354,56 @@ Execute SQL query against historical snapshots.
 - `df.write_json()` - Convert to JSON string  
 - `df.to_dict()` - Convert to Python dictionary
 - `df.to_arrow()` - Convert to Arrow Table (zero-copy)
+
+##### `workspace_query(sql: str, snapshot_pattern: str = "*", limit: int = None) -> polars.DataFrame` (New!)
+Execute SQL query across all workspace sources with cross-source joins and snapshot filtering.
+
+**Parameters:**
+- `sql`: SQL query to execute (sources are mounted as views like `orders_csv`, `users_csv`)
+- `snapshot_pattern`: Filter snapshots by pattern (default: "*" for all snapshots)
+  - `"*"` - All snapshots (default)
+  - `"*_v1"` - All snapshots ending with "_v1"  
+  - `"latest"` - Latest snapshot only
+  - `"snapshot_name"` - Specific snapshot name
+- `limit`: Optional limit on number of rows returned
+
+**Returns:** Polars DataFrame with query results
+
+**Example:**
+```python
+# Cross-source query with joins over all snapshots with name ending with "_v1"
+df = workspace.workspace_query("""
+    SELECT o.id, o.product, o.amount, u.name, u.department
+    FROM orders_csv o 
+    JOIN users_csv u ON u.id = o.user_id
+    WHERE o.amount > 50
+""", snapshot_pattern="*_v1")
+
+```
+
+##### `query_with_snapshots(file_path: str, sql: str, snapshot_pattern: str = "*", limit: int = None) -> polars.DataFrame`
+Execute SQL query against a single source with snapshot filtering.
+
+**Parameters:**
+- `file_path`: Path to the file to query
+- `sql`: SQL query to execute
+- `snapshot_pattern`: Filter snapshots by pattern (default: "*" for all snapshots)
+- `limit`: Optional limit on number of rows returned
+
+**Returns:** Polars DataFrame with query results
+
+**Example:**
+```python
+# Query specific snapshots only
+df = workspace.query_with_snapshots("orders.csv", 
+    "SELECT * FROM data WHERE amount > 100", 
+    snapshot_pattern="*_v1")
+
+# Query latest snapshot only
+latest = workspace.query_with_snapshots("orders.csv",
+    "SELECT COUNT(*) as total FROM data",
+    snapshot_pattern="latest")
+```
 
 ##### `export_snapshot(file_path: str, snapshot_name: str, output_path: str)`
 Export a snapshot to a file.
@@ -733,6 +783,94 @@ def monitor_api_endpoint():
             print(f"  - {change.description}")
     
     return snapshot
+```
+
+### Cross-Snapshot Query Analysis (New!)
+
+```python
+import snapbase
+import polars as pl
+
+workspace = snapbase.Workspace("./analysis")
+
+# Create snapshots for multiple sources
+workspace.create_snapshot("orders.csv", name="orders_v1")
+workspace.create_snapshot("users.csv", name="users_v1") 
+workspace.create_snapshot("products.csv", name="products_v1")
+
+# Cross-source queries with joins
+sales_by_dept = workspace.workspace_query("""
+    SELECT 
+        u.department,
+        COUNT(o.id) as total_orders,
+        SUM(o.amount) as total_revenue,
+        AVG(o.amount) as avg_order_value
+    FROM orders_csv o
+    JOIN users_csv u ON u.id = o.user_id
+    GROUP BY u.department
+    ORDER BY total_revenue DESC
+""", snapshot_pattern="*_v1")
+
+print("Sales by Department:")
+print(sales_by_dept)
+
+# Analyze high-value customers across sources
+high_value_customers = workspace.workspace_query("""
+    SELECT 
+        u.name, 
+        u.department,
+        COUNT(o.id) as order_count,
+        SUM(o.amount) as total_spent
+    FROM orders_csv o
+    JOIN users_csv u ON u.id = o.user_id
+    GROUP BY u.name, u.department
+    HAVING SUM(o.amount) > 500
+    ORDER BY total_spent DESC
+""")
+
+# Convert to Pandas for plotting if needed
+high_value_pandas = high_value_customers.to_pandas()
+
+# Track workspace changes over time
+workspace_summary = workspace.workspace_query("""
+    SELECT 
+        'orders' as source,
+        snapshot_name,
+        COUNT(*) as record_count,
+        AVG(amount) as avg_amount
+    FROM orders_csv
+    GROUP BY snapshot_name
+    
+    UNION ALL
+    
+    SELECT 
+        'users' as source,
+        snapshot_name,
+        COUNT(*) as record_count,
+        NULL as avg_amount
+    FROM users_csv
+    GROUP BY snapshot_name
+    
+    ORDER BY source, snapshot_name
+""")
+
+print("Workspace Evolution:")
+for row in workspace_summary.iter_rows(named=True):
+    print(f"{row['source']}: {row['snapshot_name']} - {row['record_count']} records")
+
+# Single-source query with snapshot filtering
+recent_orders = workspace.query_with_snapshots("orders.csv", """
+    SELECT 
+        product,
+        COUNT(*) as order_count,
+        SUM(amount) as total_sales
+    FROM data
+    GROUP BY product
+    ORDER BY total_sales DESC
+""", snapshot_pattern="*_v1")
+
+print("Product Sales (v1 snapshots only):")
+print(recent_orders.head())
 ```
 
 ## ⚡ Performance Tips

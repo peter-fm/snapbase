@@ -165,12 +165,13 @@ pub enum Commands {
 
     /// Query historical snapshots using SQL
     Query {
-        /// Source file to query
-        source: String,
-
-        /// SQL query to execute
+        /// SQL query to execute (required unless using --list-snapshots)
         #[arg(required_unless_present = "list_snapshots")]
         query: Option<String>,
+
+        /// Source file to query (optional for workspace-wide queries)
+        #[arg(long, short)]
+        source: Option<String>,
 
         /// Output format (table, json, csv)
         #[arg(long, default_value = "table")]
@@ -183,6 +184,11 @@ pub enum Commands {
         /// Show available snapshots for this source
         #[arg(long)]
         list_snapshots: bool,
+
+        /// Filter snapshots by pattern (default: "*" for all snapshots)
+        /// Examples: "*_v1", "latest", "snapshot_name"
+        #[arg(long, default_value = "*")]
+        snapshot: String,
     },
 
     /// Configure snapbase settings

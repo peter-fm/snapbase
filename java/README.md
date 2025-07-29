@@ -1,6 +1,8 @@
 # Snapbase Java API
 
-Java bindings for the Snaphase - a queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
+Java bindings for Snapbase - a queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
+
+**⚠️ New in this version**: Added cross-snapshot query functionality with `workspaceQuery()` and `queryWithSnapshots()` methods for advanced data analysis across multiple sources with zero-copy Arrow performance.
 
 ## Features
 
@@ -123,8 +125,10 @@ The main class for interacting with Snapbase functionality.
 - `ChangeDetectionResult status(String filePath, String baseline)` - Check status against baseline returning structured result
 
 #### Zero-Copy Arrow Querying
-- `VectorSchemaRoot query(String source, String sql)` - Query snapshots returning Arrow data (zero-copy)
-- `VectorSchemaRoot query(String source, String sql, Integer limit)` - Query with result limit (zero-copy)
+- `VectorSchemaRoot query(String source, String sql)` - Query single source returning Arrow data (zero-copy)
+- `VectorSchemaRoot query(String source, String sql, Integer limit)` - Query single source with result limit (zero-copy)
+- `VectorSchemaRoot workspaceQuery(String sql, String snapshotPattern)` - **New!** Query across all workspace sources with cross-source joins
+- `VectorSchemaRoot queryWithSnapshots(String source, String sql, String snapshotPattern)` - **New!** Query single source with snapshot filtering
 - `int queryRowCount(String source, String sql)` - Get row count efficiently
 - `FieldVector queryColumn(String source, String sql, String columnName)` - Access specific column data
 
@@ -394,6 +398,128 @@ System.out.println("Total products: " + totalProducts);
 try (FieldVector prices = workspace.queryColumn("products.csv", 
         "SELECT price FROM data WHERE category = 'Electronics'", "price")) {
     System.out.println("Electronics prices column has " + prices.getValueCount() + " values");
+}
+```
+
+### Cross-Snapshot Queries (New!)
+
+**Workspace-wide queries with cross-source joins:**
+
+```java
+// Cross-source queries across multiple snapshots
+try (VectorSchemaRoot crossSourceResults = workspace.workspaceQuery(
+        "SELECT o.id, o.product, o.amount, u.name, u.department " +
+        "FROM orders_csv o " +
+        "JOIN users_csv u ON u.id = o.user_id " +
+        "WHERE o.amount > 50", "*_v1")) {
+    
+    System.out.println("Found " + crossSourceResults.getRowCount() + " high-value orders");
+    
+    // Process cross-source results
+    FieldVector productColumn = crossSourceResults.getVector("product");
+    FieldVector amountColumn = crossSourceResults.getVector("amount");
+    FieldVector nameColumn = crossSourceResults.getVector("name");
+    FieldVector deptColumn = crossSourceResults.getVector("department");
+    
+    for (int i = 0; i < crossSourceResults.getRowCount(); i++) {
+        System.out.printf("Order: %s ($%.2f) by %s (%s)%n",
+            productColumn.getObject(i), 
+            ((Number) amountColumn.getObject(i)).doubleValue(),
+            nameColumn.getObject(i),
+            deptColumn.getObject(i));
+    }
+}
+
+// Aggregate across multiple sources
+try (VectorSchemaRoot aggregated = workspace.workspaceQuery(
+        "SELECT u.department, " +
+        "       COUNT(o.id) as total_orders, " +
+        "       SUM(o.amount) as total_revenue, " +
+        "       AVG(o.amount) as avg_order_value " +
+        "FROM orders_csv o " +
+        "JOIN users_csv u ON u.id = o.user_id " +
+        "GROUP BY u.department " +
+        "ORDER BY total_revenue DESC", "*")) {
+    
+    System.out.println("=== Sales by Department ===");
+    FieldVector deptVector = aggregated.getVector("department");
+    FieldVector countVector = aggregated.getVector("total_orders");
+    FieldVector revenueVector = aggregated.getVector("total_revenue");
+    FieldVector avgVector = aggregated.getVector("avg_order_value");
+    
+    for (int i = 0; i < aggregated.getRowCount(); i++) {
+        String dept = (String) deptVector.getObject(i);
+        Long orders = (Long) countVector.getObject(i);  
+        Double revenue = (Double) revenueVector.getObject(i);
+        Double avgOrder = (Double) avgVector.getObject(i);
+        
+        System.out.printf("%-15s: %d orders, $%.2f revenue, $%.2f avg%n",
+                         dept, orders, revenue, avgOrder);
+    }
+}
+
+// Track workspace changes over time
+try (VectorSchemaRoot evolution = workspace.workspaceQuery(
+        "SELECT snapshot_name, " +
+        "       COUNT(*) as record_count, " +
+        "       AVG(amount) as avg_amount " +
+        "FROM orders_csv " +
+        "GROUP BY snapshot_name " +
+        "ORDER BY snapshot_name", "*")) {
+    
+    System.out.println("=== Orders Evolution ===");
+    for (int i = 0; i < evolution.getRowCount(); i++) {
+        String snapshot = (String) evolution.getVector("snapshot_name").getObject(i);
+        Long count = (Long) evolution.getVector("record_count").getObject(i);
+        Double avgAmount = (Double) evolution.getVector("avg_amount").getObject(i);
+        
+        System.out.printf("Snapshot %s: %d records, $%.2f avg%n", snapshot, count, avgAmount);
+    }
+}
+```
+
+**Single-source queries with snapshot filtering:**
+
+```java
+// Query specific snapshots only
+try (VectorSchemaRoot filtered = workspace.queryWithSnapshots("orders.csv",
+        "SELECT product, COUNT(*) as order_count, SUM(amount) as total_sales " +
+        "FROM data GROUP BY product ORDER BY total_sales DESC", "*_v1")) {
+    
+    System.out.println("=== Product Sales (v1 snapshots only) ===");
+    FieldVector productVector = filtered.getVector("product");
+    FieldVector countVector = filtered.getVector("order_count");
+    FieldVector salesVector = filtered.getVector("total_sales");
+    
+    for (int i = 0; i < filtered.getRowCount(); i++) {
+        String product = (String) productVector.getObject(i);
+        Long count = (Long) countVector.getObject(i);
+        Double sales = (Double) salesVector.getObject(i);
+        
+        System.out.printf("%-20s: %d orders, $%.2f total%n", product, count, sales);
+    }
+}
+
+// Query latest snapshot only
+try (VectorSchemaRoot latest = workspace.queryWithSnapshots("orders.csv",
+        "SELECT COUNT(*) as total_orders, AVG(amount) as avg_amount FROM data", "latest")) {
+    
+    if (latest.getRowCount() > 0) {
+        Long total = (Long) latest.getVector("total_orders").getObject(0);
+        Double avg = (Double) latest.getVector("avg_amount").getObject(0);
+        System.out.printf("Latest snapshot: %d orders, $%.2f average%n", total, avg);
+    }
+}
+
+// Snapshot pattern examples
+try (VectorSchemaRoot pattern1 = workspace.workspaceQuery(
+        "SELECT COUNT(*) as count FROM orders_csv", "*_baseline")) {
+    System.out.println("Baseline snapshots: " + pattern1.getVector("count").getObject(0));
+}
+
+try (VectorSchemaRoot pattern2 = workspace.workspaceQuery(
+        "SELECT COUNT(*) as count FROM orders_csv", "orders_final")) {
+    System.out.println("Final snapshot: " + pattern2.getVector("count").getObject(0));  
 }
 ```
 

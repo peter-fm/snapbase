@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 
 use snapbase_core::{
     change_detection::StreamingChangeDetector, config::get_snapshot_config_with_workspace,
-    naming::SnapshotNamer, query::SnapshotQueryEngine, resolver::SnapshotResolver,
+    naming::SnapshotNamer, query::{SnapshotQueryEngine, execute_query_with_describe}, 
+    query_engine::{create_configured_connection, register_workspace_source_views, build_snapshot_path_pattern},
+    resolver::SnapshotResolver,
     snapshot::SnapshotMetadata, ExportFormat, ExportOptions, Result as SnapbaseResult,
     SnapbaseWorkspace, UnifiedExporter,
 };
@@ -886,6 +888,197 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'loc
     }
 }
 
+/// Query across all workspace sources with cross-snapshot capability
+#[no_mangle]
+pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeWorkspaceQueryArrow<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    sql: JString<'local>,
+    snapshot_pattern: JString<'local>,
+    array_ptr: jlong,
+    schema_ptr: jlong,
+) {
+    let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
+
+    let sql_str = match jstring_to_string(&mut env, &sql) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert SQL");
+            return;
+        }
+    };
+
+    let pattern_str = match jstring_to_string(&mut env, &snapshot_pattern) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert snapshot pattern");
+            return;
+        }
+    };
+
+    // Create DuckDB connection configured for the workspace storage backend
+    let connection = match create_configured_connection(&workspace_handle.workspace) {
+        Ok(conn) => conn,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to create connection: {e}"),
+            );
+            return;
+        }
+    };
+
+    // Register workspace-wide views
+    let registered_views = match register_workspace_source_views(&connection, &workspace_handle.workspace, &pattern_str) {
+        Ok(views) => views,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to register workspace views: {e}"),
+            );
+            return;
+        }
+    };
+
+    if registered_views.is_empty() {
+        let _ = env.throw_new("com/snapbase/SnapbaseException", "No sources found in workspace");
+        return;
+    }
+
+    // Execute query using the shared helper function
+    let result = match execute_query_with_describe(&connection, &sql_str) {
+        Ok(res) => res,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Workspace query failed: {e}"),
+            );
+            return;
+        }
+    };
+
+    // Convert QueryResult to Arrow RecordBatch
+    let record_batch = match query_result_to_arrow(&result) {
+        Ok(batch) => batch,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to convert to Arrow: {e}"),
+            );
+            return;
+        }
+    };
+
+    // Export to C Data Interface for zero-copy transfer to Java
+    export_arrow_to_ffi(&mut env, record_batch, array_ptr, schema_ptr);
+}
+
+/// Query single source with snapshot filtering
+#[no_mangle]
+pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryWithSnapshotsArrow<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    source: JString<'local>,
+    sql: JString<'local>,
+    snapshot_pattern: JString<'local>,
+    array_ptr: jlong,
+    schema_ptr: jlong,
+) {
+    let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
+
+    let source_str = match jstring_to_string(&mut env, &source) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert source");
+            return;
+        }
+    };
+
+    let sql_str = match jstring_to_string(&mut env, &sql) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert SQL");
+            return;
+        }
+    };
+
+    let pattern_str = match jstring_to_string(&mut env, &snapshot_pattern) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert snapshot pattern");
+            return;
+        }
+    };
+
+    // Create DuckDB connection configured for the workspace storage backend
+    let connection = match create_configured_connection(&workspace_handle.workspace) {
+        Ok(conn) => conn,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to create connection: {e}"),
+            );
+            return;
+        }
+    };
+
+    // Build filtered query path using snapshot pattern
+    let query_path = match build_snapshot_path_pattern(&workspace_handle.workspace, &source_str, &pattern_str) {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to build snapshot path pattern: {e}"),
+            );
+            return;
+        }
+    };
+    
+    // Register single source view with snapshot filtering
+    if let Err(e) = connection.execute(
+        &format!(
+            "CREATE OR REPLACE VIEW data AS SELECT * 
+             FROM read_parquet('{query_path}', hive_partitioning=true, union_by_name=true)"
+        ),
+        [],
+    ) {
+        let _ = env.throw_new(
+            "com/snapbase/SnapbaseException",
+            format!("Failed to register filtered view: {e}"),
+        );
+        return;
+    }
+
+    // Execute query using the shared helper function
+    let result = match execute_query_with_describe(&connection, &sql_str) {
+        Ok(res) => res,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Query with snapshots failed: {e}"),
+            );
+            return;
+        }
+    };
+
+    // Convert QueryResult to Arrow RecordBatch
+    let record_batch = match query_result_to_arrow(&result) {
+        Ok(batch) => batch,
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to convert to Arrow: {e}"),
+            );
+            return;
+        }
+    };
+
+    // Export to C Data Interface for zero-copy transfer to Java
+    export_arrow_to_ffi(&mut env, record_batch, array_ptr, schema_ptr);
+}
+
 /// Get workspace path
 #[no_mangle]
 pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeGetPath<'local>(
@@ -1482,6 +1675,84 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeClose<'local>(
     if handle != 0 {
         let _workspace_handle = unsafe { Box::from_raw(handle as *mut WorkspaceHandle) };
         // The workspace will be automatically dropped when the Box goes out of scope
+    }
+}
+
+/// Convert QueryResult to Arrow RecordBatch
+fn query_result_to_arrow(result: &snapbase_core::query::QueryResult) -> SnapbaseResult<arrow::record_batch::RecordBatch> {
+    use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
+
+    // Build schema from column names
+    let fields: Vec<Field> = result.columns.iter()
+        .map(|name| Field::new(name, DataType::Utf8, true)) // Use string for all columns for simplicity
+        .collect();
+    let schema = Arc::new(Schema::new(fields));
+
+    // Convert QueryResult rows to Arrow arrays
+    let mut column_builders: Vec<Vec<Option<String>>> = vec![vec![]; result.columns.len()];
+    
+    for row in &result.rows {
+        for (col_idx, value) in row.iter().enumerate() {
+            let string_value = match value {
+                snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
+                snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
+                snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
+                snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
+                snapbase_core::query::QueryValue::Null => None,
+            };
+            column_builders[col_idx].push(string_value);
+        }
+    }
+
+    // Build Arrow arrays
+    let arrays: Vec<ArrayRef> = column_builders.into_iter()
+        .map(|column_data| {
+            Arc::new(StringArray::from(column_data)) as ArrayRef
+        })
+        .collect();
+
+    RecordBatch::try_new(schema, arrays)
+        .map_err(|e| snapbase_core::error::SnapbaseError::data_processing(format!("Failed to create Arrow batch: {e}")))
+}
+
+/// Export Arrow RecordBatch to FFI structures for Java consumption
+fn export_arrow_to_ffi(
+    env: &mut JNIEnv,
+    record_batch: arrow::record_batch::RecordBatch,
+    array_ptr: jlong,
+    schema_ptr: jlong,
+) {
+    // Export to C Data Interface for zero-copy transfer to Java
+    let array_ptr = array_ptr as *mut FFI_ArrowArray;
+    let schema_ptr = schema_ptr as *mut FFI_ArrowSchema;
+
+    // Convert RecordBatch to FFI structures using proper Arrow FFI API
+    use arrow::array::StructArray;
+
+    // Convert RecordBatch to StructArray
+    let struct_array: StructArray = record_batch.into();
+
+    // Get the underlying ArrayData
+    let array_data = struct_array.into_data();
+
+    // Convert to FFI using arrow::ffi::to_ffi
+    match arrow::ffi::to_ffi(&array_data) {
+        Ok((ffi_array, ffi_schema)) => {
+            unsafe {
+                // Copy FFI structures to the provided pointers
+                *array_ptr = ffi_array;
+                *schema_ptr = ffi_schema;
+            }
+        }
+        Err(e) => {
+            let _ = env.throw_new(
+                "com/snapbase/SnapbaseException",
+                format!("Failed to export to FFI: {e}"),
+            );
+        }
     }
 }
 

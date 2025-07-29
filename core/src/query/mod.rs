@@ -6,7 +6,6 @@ use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use duckdb::Connection;
 use serde::{Deserialize, Serialize};
-use tempfile;
 
 /// Query result structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,83 +86,13 @@ impl SnapshotQueryEngine {
         Ok(concatenated)
     }
 
-    /// Execute SQL query against source snapshots (legacy JSON format)
+    /// Execute SQL query against source snapshots using DESCRIBE approach
     pub fn query(&mut self, source_file: &str, sql: &str) -> Result<QueryResult> {
         // Register Hive-partitioned view for the source
         self.register_source_view(source_file)?;
 
-        // Use CSV export approach to avoid prepared statements entirely
-        // Query execution using CSV export to avoid prepared statement issues
-
-        // Create temporary file for query results
-        let temp_file = tempfile::NamedTempFile::new().map_err(|e| {
-            SnapbaseError::invalid_input(format!("Failed to create temporary file: {e}"))
-        })?;
-        let temp_csv_path = temp_file.path().to_string_lossy().to_string();
-
-        // Close the file handle to prevent locking issues on Windows
-        drop(temp_file);
-
-        let export_sql = format!("COPY ({sql}) TO '{temp_csv_path}' (FORMAT CSV, HEADER true)");
-
-        self.connection
-            .execute(&export_sql, [])
-            .map_err(|e| SnapbaseError::invalid_input(format!("Query execution failed: {e}")))?;
-
-        // Read the CSV file back to get results
-        let csv_content = std::fs::read_to_string(&temp_csv_path).map_err(|e| {
-            SnapbaseError::invalid_input(format!("Failed to read query results: {e}"))
-        })?;
-
-        // Parse the CSV content
-        let mut lines = csv_content.lines();
-
-        // Get column names from header
-        let columns = if let Some(header_line) = lines.next() {
-            header_line
-                .split(',')
-                .map(|s| s.trim_matches('"').to_string())
-                .collect()
-        } else {
-            return Err(SnapbaseError::invalid_input(
-                "Empty query result".to_string(),
-            ));
-        };
-
-        // Parse data rows
-        let mut rows = Vec::new();
-        for line in lines {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let mut row = Vec::new();
-            for field in line.split(',') {
-                let cleaned_field = field.trim_matches('"');
-
-                // Try to parse as different types
-                let value = if cleaned_field == "NULL" || cleaned_field.is_empty() {
-                    QueryValue::Null
-                } else if let Ok(i) = cleaned_field.parse::<i64>() {
-                    QueryValue::Integer(i)
-                } else if let Ok(f) = cleaned_field.parse::<f64>() {
-                    QueryValue::Float(f)
-                } else if let Ok(b) = cleaned_field.parse::<bool>() {
-                    QueryValue::Boolean(b)
-                } else {
-                    QueryValue::String(cleaned_field.to_string())
-                };
-
-                row.push(value);
-            }
-            rows.push(row);
-        }
-
-        Ok(QueryResult {
-            columns,
-            row_count: rows.len(),
-            rows,
-        })
+        // Use the shared helper function for consistent query execution
+        execute_query_with_describe(&self.connection, sql)
     }
 
     /// Register a Hive-partitioned view for a source file
@@ -206,4 +135,106 @@ pub struct SnapshotInfo {
     pub name: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub source: String,
+}
+
+/// Execute a DuckDB query using the DESCRIBE approach for proper type handling
+/// This avoids the temporary CSV file approach and provides native DuckDB type conversion
+pub fn execute_query_with_describe(connection: &Connection, sql: &str) -> Result<QueryResult> {
+    // Use DESCRIBE to get column information first
+    let describe_sql = format!("DESCRIBE {sql}");
+    let mut describe_stmt = connection.prepare(&describe_sql).map_err(|e| {
+        SnapbaseError::invalid_input(format!("Failed to describe query: {e}"))
+    })?;
+
+    let mut columns = Vec::new();
+    let describe_rows = describe_stmt.query_map([], |row| {
+        let column_name: String = row.get(0)?;
+        Ok(column_name)
+    }).map_err(|e| {
+        SnapbaseError::invalid_input(format!("Failed to get query schema: {e}"))
+    })?;
+
+    for row_result in describe_rows {
+        let column_name = row_result.map_err(|e| {
+            SnapbaseError::invalid_input(format!("Failed to read column info: {e}"))
+        })?;
+        columns.push(column_name);
+    }
+
+    // Now execute the actual query
+    let mut stmt = connection.prepare(sql).map_err(|e| {
+        SnapbaseError::invalid_input(format!("Failed to prepare query: {e}"))
+    })?;
+
+    let column_count = columns.len();
+    let rows_result = stmt.query_map([], |row| {
+        let mut row_values = Vec::new();
+        for i in 0..column_count {
+            let value = match row.get::<usize, duckdb::types::Value>(i) {
+                Ok(duckdb::types::Value::Null) => QueryValue::Null,
+                Ok(duckdb::types::Value::Boolean(b)) => QueryValue::Boolean(b),
+                Ok(duckdb::types::Value::TinyInt(i)) => QueryValue::Integer(i as i64),
+                Ok(duckdb::types::Value::SmallInt(i)) => QueryValue::Integer(i as i64),
+                Ok(duckdb::types::Value::Int(i)) => QueryValue::Integer(i as i64),
+                Ok(duckdb::types::Value::BigInt(i)) => QueryValue::Integer(i),
+                Ok(duckdb::types::Value::UTinyInt(i)) => QueryValue::Integer(i as i64),
+                Ok(duckdb::types::Value::USmallInt(i)) => QueryValue::Integer(i as i64),
+                Ok(duckdb::types::Value::UInt(i)) => QueryValue::Integer(i as i64),
+                Ok(duckdb::types::Value::UBigInt(i)) => QueryValue::Integer(i as i64),
+                Ok(duckdb::types::Value::HugeInt(i)) => {
+                    // HugeInt is i128, try to convert to i64, or use string representation if too big
+                    if let Ok(i64_val) = i.try_into() {
+                        QueryValue::Integer(i64_val)
+                    } else {
+                        QueryValue::String(i.to_string())
+                    }
+                }
+                Ok(duckdb::types::Value::Float(f)) => QueryValue::Float(f as f64),
+                Ok(duckdb::types::Value::Double(f)) => QueryValue::Float(f),
+                Ok(duckdb::types::Value::Text(s)) => QueryValue::String(s),
+                Ok(duckdb::types::Value::Blob(b)) => QueryValue::String(format!("BLOB({} bytes)", b.len())),
+                Ok(duckdb::types::Value::Date32(d)) => QueryValue::String(format!("Date({})", d)),
+                Ok(duckdb::types::Value::Time64(t, _)) => QueryValue::String(format!("Time({:?})", t)),
+                Ok(duckdb::types::Value::Timestamp(ts, _)) => QueryValue::String(format!("Timestamp({:?})", ts)),
+                Ok(duckdb::types::Value::Interval { months, days, nanos }) => {
+                    QueryValue::String(format!("Interval({} months, {} days, {} nanos)", months, days, nanos))
+                }
+                Ok(duckdb::types::Value::Decimal(d)) => QueryValue::String(d.to_string()),
+                Ok(duckdb::types::Value::Enum(s)) => QueryValue::String(s),
+                Ok(duckdb::types::Value::List(l)) => {
+                    QueryValue::String(format!("List({} items)", l.len()))
+                }
+                Ok(duckdb::types::Value::Struct(s)) => {
+                    QueryValue::String(format!("Struct({} fields)", s.iter().count()))
+                }
+                Ok(duckdb::types::Value::Map(m)) => {
+                    QueryValue::String(format!("Map({} entries)", m.iter().count()))
+                }
+                Ok(duckdb::types::Value::Array(a)) => {
+                    QueryValue::String(format!("Array({} items)", a.len()))
+                }
+                Ok(duckdb::types::Value::Union(u)) => QueryValue::String(format!("Union({:?})", u)),
+                Err(_) => QueryValue::Null,
+            };
+            row_values.push(value);
+        }
+        Ok(row_values)
+    }).map_err(|e| {
+        SnapbaseError::invalid_input(format!("Query execution failed: {e}"))
+    })?;
+
+    // Collect all rows
+    let mut rows = Vec::new();
+    for row_result in rows_result {
+        let row = row_result.map_err(|e| {
+            SnapbaseError::invalid_input(format!("Failed to process query row: {e}"))
+        })?;
+        rows.push(row);
+    }
+
+    Ok(QueryResult {
+        columns,
+        row_count: rows.len(),
+        rows,
+    })
 }

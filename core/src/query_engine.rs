@@ -2,6 +2,7 @@ use crate::config::StorageConfig;
 use crate::workspace::SnapbaseWorkspace;
 use anyhow::Result;
 use duckdb::Connection;
+use std::collections::HashMap;
 
 /// Configure DuckDB for different storage backends
 pub fn configure_duckdb_for_storage(connection: &Connection, config: &StorageConfig) -> Result<()> {
@@ -152,6 +153,12 @@ pub fn create_configured_connection(workspace: &SnapbaseWorkspace) -> Result<Con
     Ok(connection)
 }
 
+/// Sanitize view name by replacing dots with underscores to avoid DuckDB confusion
+/// Examples: "orders.csv" -> "orders_csv", "data.json" -> "data_json"
+pub fn sanitize_view_name(source: &str) -> String {
+    source.replace('.', "_")
+}
+
 /// Register a Hive-partitioned view for querying snapshots
 pub fn register_hive_view(
     connection: &Connection,
@@ -177,4 +184,91 @@ pub fn register_hive_view(
     log::debug!("Registered Hive view '{view_name}' for source '{source}' at path: {query_path}");
 
     Ok(())
+}
+
+/// Build snapshot path pattern based on snapshot filter
+/// Examples:
+/// - "*" -> "sources/{source}/**/*.parquet" (all snapshots)
+/// - "*_v1" -> "sources/{source}/snapshot_name=*_v1/*/data.parquet" (pattern matching)
+/// - "latest" -> specific paths after metadata lookup
+pub fn build_snapshot_path_pattern(
+    workspace: &SnapbaseWorkspace,
+    source: &str,
+    snapshot_pattern: &str,
+) -> Result<String> {
+    let base_path = format!("sources/{source}");
+    
+    match snapshot_pattern {
+        "*" => {
+            // All snapshots - use double wildcard for all snapshot directories
+            Ok(workspace.storage().get_duckdb_path(&format!("{base_path}/**/*.parquet")))
+        }
+        "latest" => {
+            // Need to find the latest snapshot for this source
+            let rt = tokio::runtime::Runtime::new()?;
+            let latest_snapshot = rt.block_on(async {
+                match workspace.storage().list_snapshots_for_all_sources().await {
+                    Ok(all_snapshots) => {
+                        if let Some(snapshots) = all_snapshots.get(source) {
+                            // Get the last snapshot (should be the latest based on naming/timestamp)
+                            snapshots.last().cloned()
+                        } else {
+                            None
+                        }
+                    }
+                    Err(_) => None,
+                }
+            });
+            
+            if let Some(latest) = latest_snapshot {
+                // Build specific path for the latest snapshot
+                let pattern = format!("{base_path}/snapshot_name={latest}/*/data.parquet");
+                Ok(workspace.storage().get_duckdb_path(&pattern))
+            } else {
+                Err(anyhow::anyhow!("No snapshots found for source: {source}"))
+            }
+        }
+        pattern => {
+            // Pattern matching for snapshot names
+            let filtered_pattern = format!("{base_path}/snapshot_name={pattern}/*/data.parquet");
+            Ok(workspace.storage().get_duckdb_path(&filtered_pattern))
+        }
+    }
+}
+
+/// Register workspace-wide views for all sources with snapshot filtering
+/// Creates views like: orders_csv, users_csv, products_json
+pub fn register_workspace_source_views(
+    connection: &Connection,
+    workspace: &SnapbaseWorkspace,
+    snapshot_pattern: &str,
+) -> Result<HashMap<String, String>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let all_snapshots = rt.block_on(async {
+        workspace.storage().list_snapshots_for_all_sources().await
+    })?;
+
+    let mut registered_views = HashMap::new();
+
+    for (source, snapshots) in all_snapshots {
+        if snapshots.is_empty() {
+            continue; // Skip sources with no snapshots
+        }
+
+        let view_name = sanitize_view_name(&source);
+        let query_path = build_snapshot_path_pattern(workspace, &source, snapshot_pattern)?;
+
+        // Create view with hive partitioning to get snapshot_name and snapshot_timestamp columns
+        let create_view_sql = format!(
+            "CREATE OR REPLACE VIEW {view_name} AS SELECT * 
+             FROM read_parquet('{query_path}', hive_partitioning=true, union_by_name=true)"
+        );
+
+        connection.execute(&create_view_sql, [])?;
+        
+        log::debug!("Registered workspace view '{view_name}' for source '{source}' with pattern '{snapshot_pattern}'");
+        registered_views.insert(source, view_name);
+    }
+
+    Ok(registered_views)
 }
