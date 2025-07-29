@@ -8,7 +8,7 @@ between versions.
 
 from snapbase._core import Workspace
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 __all__ = ["Workspace"]
 
 

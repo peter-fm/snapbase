@@ -31,7 +31,7 @@ Add the dependency to your `pom.xml`:
 <dependency>
     <groupId>com.snapbase</groupId>
     <artifactId>snapbase-java</artifactId>
-    <version>latest</version>
+    <version>version</version>
 </dependency>
 ```
 
