@@ -153,10 +153,10 @@ pub fn create_configured_connection(workspace: &SnapbaseWorkspace) -> Result<Con
     Ok(connection)
 }
 
-/// Sanitize view name by replacing dots with underscores to avoid DuckDB confusion
-/// Examples: "orders.csv" -> "orders_csv", "data.json" -> "data_json"
+/// Sanitize view name by replacing dots and colons with underscores to avoid DuckDB confusion
+/// Examples: "orders.csv" -> "orders_csv", "data.json" -> "data_json", "database:table" -> "database_table"
 pub fn sanitize_view_name(source: &str) -> String {
-    source.replace('.', "_")
+    source.replace('.', "_").replace(':', "_")
 }
 
 /// Register a Hive-partitioned view for querying snapshots
