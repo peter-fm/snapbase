@@ -33,7 +33,7 @@ def test_large_result_set_performance(temp_workspace):
     # Time Polars method
     print(f"⚡ Testing Polars DataFrame method...")
     start_time = time.time()
-    polars_result = workspace.query(str(large_csv), query)
+    polars_result = workspace.query(query.replace("FROM data", "FROM large_results_test_csv"))
     polars_time = time.time() - start_time
     
     print(f"\n📈 Large Result Set Performance:")

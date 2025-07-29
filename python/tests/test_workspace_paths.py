@@ -222,7 +222,7 @@ class TestWorkspacePathBehaviorMismatch:
                 assert snapshot_exists, "Snapshot should exist in workspace .snapbase directory"
                 
                 # Test querying works from the workspace
-                query_result = workspace.query("test_data.csv", "SELECT COUNT(*) as count FROM data WHERE snapshot_name = 'test_snapshot'")
+                query_result = workspace.query("SELECT COUNT(*) as count FROM test_data_csv WHERE snapshot_name = 'test_snapshot'")
                 assert len(query_result) > 0, "Should be able to query snapshot from workspace"
                 
             finally:

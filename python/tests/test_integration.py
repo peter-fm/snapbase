@@ -36,7 +36,7 @@ class TestIntegration:
         assert hasattr(changes, 'row_changes')
         
         # Step 4: Query data (now returns Polars DataFrame)
-        query_result = workspace.query(sample_csv_file.name, "SELECT * FROM data WHERE age > 25")
+        query_result = workspace.query("SELECT * FROM test_data_csv WHERE age > 25")
         # Import polars for type checking
         try:
             import polars as pl

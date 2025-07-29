@@ -41,7 +41,7 @@ class TestPerformanceDemo:
         
         print(f"\n⚡ Getting Polars DataFrame...")
         start_time = time.time()
-        df = workspace.query(str(demo_csv), query)
+        df = workspace.query(query.replace("FROM data", "FROM polars_demo_csv"))
         query_time = time.time() - start_time
         
         print(f"   Query time: {query_time:.4f} seconds")
@@ -93,7 +93,7 @@ class TestPerformanceDemo:
         workspace.create_snapshot(memory_csv.name, "memory_test")
         
         # Get Polars DataFrame
-        df = workspace.query(memory_csv.name, "SELECT * FROM data")
+        df = workspace.query("SELECT * FROM memory_test_csv")
         
         print(f"\n💾 Memory efficiency demo:")
         print(f"   DataFrame shape: {df.shape}")

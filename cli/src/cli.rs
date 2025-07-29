@@ -169,10 +169,6 @@ pub enum Commands {
         #[arg(required_unless_present = "list_snapshots")]
         query: Option<String>,
 
-        /// Source file to query (optional for workspace-wide queries)
-        #[arg(long, short)]
-        source: Option<String>,
-
         /// Output format (table, json, csv)
         #[arg(long, default_value = "table")]
         format: String,
@@ -181,7 +177,7 @@ pub enum Commands {
         #[arg(long)]
         limit: Option<usize>,
 
-        /// Show available snapshots for this source
+        /// Show available snapshots
         #[arg(long)]
         list_snapshots: bool,
 

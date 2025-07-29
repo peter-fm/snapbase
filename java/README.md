@@ -2,7 +2,7 @@
 
 Java bindings for Snapbase - a queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
 
-**⚠️ New in this version**: Added cross-snapshot query functionality with `workspaceQuery()` and `queryWithSnapshots()` methods for advanced data analysis across multiple sources with zero-copy Arrow performance.
+**⚠️ Simplified in this version**: Unified query interface - now just one `query()` method for all workspace queries with zero-copy Arrow performance.
 
 ## Features
 
@@ -92,7 +92,7 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/path/to/workspace")) 
     System.out.println("Total changes: " + result.getRowChanges().getTotalChanges());
     
     // Query historical data with zero-copy Arrow performance
-    try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data LIMIT 10")) {
+    try (VectorSchemaRoot result = workspace.query("SELECT * FROM data_csv LIMIT 10")) {
         System.out.println("Rows: " + result.getRowCount());
         System.out.println("Columns: " + result.getFieldVectors().size());
         
@@ -125,12 +125,9 @@ The main class for interacting with Snapbase functionality.
 - `ChangeDetectionResult status(String filePath, String baseline)` - Check status against baseline returning structured result
 
 #### Zero-Copy Arrow Querying
-- `VectorSchemaRoot query(String source, String sql)` - Query single source returning Arrow data (zero-copy)
-- `VectorSchemaRoot query(String source, String sql, Integer limit)` - Query single source with result limit (zero-copy)
-- `VectorSchemaRoot workspaceQuery(String sql, String snapshotPattern)` - **New!** Query across all workspace sources with cross-source joins
-- `VectorSchemaRoot queryWithSnapshots(String source, String sql, String snapshotPattern)` - **New!** Query single source with snapshot filtering
-- `int queryRowCount(String source, String sql)` - Get row count efficiently
-- `FieldVector queryColumn(String source, String sql, String columnName)` - Access specific column data
+- `VectorSchemaRoot query(String sql)` - Query workspace sources returning Arrow data (zero-copy)
+- `VectorSchemaRoot query(String sql, String snapshotPattern)` - Query with snapshot filtering (zero-copy)
+- `VectorSchemaRoot query(String sql, String snapshotPattern, Integer limit)` - Query with snapshot filtering and result limit (zero-copy)
 
 #### Snapshot Management
 - `List<String> listSnapshots()` - List all snapshots
@@ -344,12 +341,12 @@ for (RowModification modification : result.getRowChanges().getModified()) {
 
 ```java
 // Get all data (no limit)
-try (VectorSchemaRoot allData = workspace.query("huge.csv", "SELECT * FROM data")) {
+try (VectorSchemaRoot allData = workspace.query("SELECT * FROM huge_csv")) {
     System.out.println("All " + allData.getRowCount() + " rows loaded");
 }
 
 // Limit results for large datasets
-try (VectorSchemaRoot sample = workspace.query("huge.csv", "SELECT * FROM data", 1000)) {
+try (VectorSchemaRoot sample = workspace.query("SELECT * FROM huge_csv", "*", 1000)) {
     System.out.println("First 1000 rows: " + sample.getRowCount());
 }
 
@@ -357,8 +354,8 @@ try (VectorSchemaRoot sample = workspace.query("huge.csv", "SELECT * FROM data",
 int batchSize = 10000;
 int offset = 0;
 while (true) {
-    try (VectorSchemaRoot batch = workspace.query("huge.csv", 
-            "SELECT * FROM data LIMIT " + batchSize + " OFFSET " + offset)) {
+    try (VectorSchemaRoot batch = workspace.query(
+            "SELECT * FROM huge_csv LIMIT " + batchSize + " OFFSET " + offset)) {
         
         if (batch.getRowCount() == 0) break;
         
@@ -373,8 +370,8 @@ while (true) {
 
 ```java
 // Ultra-fast columnar data access with Apache Arrow
-try (VectorSchemaRoot results = workspace.query("products.csv", 
-        "SELECT * FROM data WHERE price > 100", 1000)) {
+try (VectorSchemaRoot results = workspace.query(
+        "SELECT * FROM products_csv WHERE price > 100", "*", 1000)) {
     
     System.out.println("Found " + results.getRowCount() + " expensive products");
     
@@ -391,23 +388,24 @@ try (VectorSchemaRoot results = workspace.query("products.csv",
 }
 
 // Get just row count efficiently
-int totalProducts = workspace.queryRowCount("products.csv", "SELECT * FROM data");
+// Note: queryRowCount method removed - use regular query with COUNT(*)
 System.out.println("Total products: " + totalProducts);
 
 // Access single column data
-try (FieldVector prices = workspace.queryColumn("products.csv", 
-        "SELECT price FROM data WHERE category = 'Electronics'", "price")) {
+try (VectorSchemaRoot result = workspace.query(
+        "SELECT price FROM products_csv WHERE category = 'Electronics'")) {
+    FieldVector prices = result.getVector("price");
     System.out.println("Electronics prices column has " + prices.getValueCount() + " values");
 }
 ```
 
-### Cross-Snapshot Queries (New!)
+### Query Examples
 
 **Workspace-wide queries with cross-source joins:**
 
 ```java
 // Cross-source queries across multiple snapshots
-try (VectorSchemaRoot crossSourceResults = workspace.workspaceQuery(
+try (VectorSchemaRoot crossSourceResults = workspace.query(
         "SELECT o.id, o.product, o.amount, u.name, u.department " +
         "FROM orders_csv o " +
         "JOIN users_csv u ON u.id = o.user_id " +
@@ -431,7 +429,7 @@ try (VectorSchemaRoot crossSourceResults = workspace.workspaceQuery(
 }
 
 // Aggregate across multiple sources
-try (VectorSchemaRoot aggregated = workspace.workspaceQuery(
+try (VectorSchemaRoot aggregated = workspace.query(
         "SELECT u.department, " +
         "       COUNT(o.id) as total_orders, " +
         "       SUM(o.amount) as total_revenue, " +
@@ -459,7 +457,7 @@ try (VectorSchemaRoot aggregated = workspace.workspaceQuery(
 }
 
 // Track workspace changes over time
-try (VectorSchemaRoot evolution = workspace.workspaceQuery(
+try (VectorSchemaRoot evolution = workspace.query(
         "SELECT snapshot_name, " +
         "       COUNT(*) as record_count, " +
         "       AVG(amount) as avg_amount " +
@@ -478,13 +476,13 @@ try (VectorSchemaRoot evolution = workspace.workspaceQuery(
 }
 ```
 
-**Single-source queries with snapshot filtering:**
+**Queries with snapshot filtering:**
 
 ```java
 // Query specific snapshots only
-try (VectorSchemaRoot filtered = workspace.queryWithSnapshots("orders.csv",
+try (VectorSchemaRoot filtered = workspace.query(
         "SELECT product, COUNT(*) as order_count, SUM(amount) as total_sales " +
-        "FROM data GROUP BY product ORDER BY total_sales DESC", "*_v1")) {
+        "FROM orders_csv GROUP BY product ORDER BY total_sales DESC", "*_v1")) {
     
     System.out.println("=== Product Sales (v1 snapshots only) ===");
     FieldVector productVector = filtered.getVector("product");
@@ -501,8 +499,8 @@ try (VectorSchemaRoot filtered = workspace.queryWithSnapshots("orders.csv",
 }
 
 // Query latest snapshot only
-try (VectorSchemaRoot latest = workspace.queryWithSnapshots("orders.csv",
-        "SELECT COUNT(*) as total_orders, AVG(amount) as avg_amount FROM data", "latest")) {
+try (VectorSchemaRoot latest = workspace.query(
+        "SELECT COUNT(*) as total_orders, AVG(amount) as avg_amount FROM orders_csv", "latest")) {
     
     if (latest.getRowCount() > 0) {
         Long total = (Long) latest.getVector("total_orders").getObject(0);
@@ -512,12 +510,12 @@ try (VectorSchemaRoot latest = workspace.queryWithSnapshots("orders.csv",
 }
 
 // Snapshot pattern examples
-try (VectorSchemaRoot pattern1 = workspace.workspaceQuery(
+try (VectorSchemaRoot pattern1 = workspace.query(
         "SELECT COUNT(*) as count FROM orders_csv", "*_baseline")) {
     System.out.println("Baseline snapshots: " + pattern1.getVector("count").getObject(0));
 }
 
-try (VectorSchemaRoot pattern2 = workspace.workspaceQuery(
+try (VectorSchemaRoot pattern2 = workspace.query(
         "SELECT COUNT(*) as count FROM orders_csv", "orders_final")) {
     System.out.println("Final snapshot: " + pattern2.getVector("count").getObject(0));  
 }
@@ -531,7 +529,7 @@ Unlike Python where Snapbase returns Polars DataFrames, the Java API returns Apa
 
 ```java
 // Query returns VectorSchemaRoot - Apache Arrow's columnar format
-try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM data")) {
+try (VectorSchemaRoot result = workspace.query("SELECT * FROM employees_csv")) {
     
     // Get individual columns as FieldVector
     FieldVector idColumn = result.getVector("id");
@@ -574,7 +572,7 @@ public static List<Map<String, Object>> toRowMaps(VectorSchemaRoot result) {
 }
 
 // Usage example
-try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data")) {
+try (VectorSchemaRoot result = workspace.query("SELECT * FROM data_csv")) {
     List<Map<String, Object>> rows = toRowMaps(result);
     
     // Now you can use standard Java collection operations
@@ -589,8 +587,8 @@ try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data")
 **Recommended: SQL-based filtering (most efficient)**
 ```java
 // Let DuckDB do the heavy lifting - much faster than Java filtering
-try (VectorSchemaRoot filtered = workspace.query("employees.csv", 
-    "SELECT * FROM data WHERE salary > 70000 AND department = 'Engineering'")) {
+try (VectorSchemaRoot filtered = workspace.query(
+    "SELECT * FROM employees_csv WHERE salary > 70000 AND department = 'Engineering'")) {
     
     System.out.println("High-paid engineers: " + filtered.getRowCount());
     // Process filtered results...
@@ -600,7 +598,7 @@ try (VectorSchemaRoot filtered = workspace.query("employees.csv",
 **Alternative: Programmatic filtering after retrieval**
 ```java
 // Convert to Java collections first, then filter
-try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM data")) {
+try (VectorSchemaRoot result = workspace.query("SELECT * FROM employees_csv")) {
     List<Map<String, Object>> rows = toRowMaps(result);
     
     // Filter using Java Streams (similar to pandas/polars filtering)
@@ -620,13 +618,13 @@ try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM d
 **Recommended: SQL-based aggregation**
 ```java
 // Use SQL for grouping and statistics - leverages DuckDB's performance
-try (VectorSchemaRoot grouped = workspace.query("employees.csv", 
+try (VectorSchemaRoot grouped = workspace.query(
     "SELECT department, " +
     "       COUNT(*) as employee_count, " +
     "       AVG(salary) as avg_salary, " +
     "       MIN(salary) as min_salary, " +
     "       MAX(salary) as max_salary " +
-    "FROM data " +
+    "FROM employees_csv " +
     "GROUP BY department " +
     "ORDER BY avg_salary DESC")) {
     
@@ -656,7 +654,7 @@ try (VectorSchemaRoot grouped = workspace.query("employees.csv",
 **Alternative: Java-based grouping**
 ```java
 // Group data using Java Streams (similar to pandas groupby)
-try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM data")) {
+try (VectorSchemaRoot result = workspace.query("SELECT * FROM employees_csv")) {
     List<Map<String, Object>> rows = toRowMaps(result);
     
     // Group by department
@@ -685,7 +683,7 @@ try (VectorSchemaRoot result = workspace.query("employees.csv", "SELECT * FROM d
 **Calculate statistics via SQL (recommended)**
 ```java
 // Get comprehensive statistics in a single query
-try (VectorSchemaRoot stats = workspace.query("employees.csv", 
+try (VectorSchemaRoot stats = workspace.query(
     "SELECT " +
     "    COUNT(*) as total_employees, " +
     "    AVG(salary) as mean_salary, " +
@@ -693,7 +691,7 @@ try (VectorSchemaRoot stats = workspace.query("employees.csv",
     "    MAX(salary) as max_salary, " +
     "    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY salary) as median_salary, " +
     "    STDDEV(salary) as salary_stddev " +
-    "FROM data")) {
+    "FROM employees_csv")) {
     
     if (stats.getRowCount() > 0) {
         Long total = (Long) stats.getVector("total_employees").getObject(0);
@@ -718,10 +716,10 @@ try (VectorSchemaRoot stats = workspace.query("employees.csv",
 **Working with temporal data across snapshots:**
 ```java
 // Analyze salary changes over time across different snapshots
-try (VectorSchemaRoot changes = workspace.query("employees.csv", 
+try (VectorSchemaRoot changes = workspace.query(
     "SELECT e1.name, e1.salary as old_salary, e2.salary as new_salary, " +
     "       (e2.salary - e1.salary) as salary_change " +
-    "FROM data e1 " +
+    "FROM employees_csv e1 " +
     "JOIN data e2 ON e1.id = e2.id " +
     "WHERE e1.snapshot_name = 'baseline' AND e2.snapshot_name = 'current' " +
     "AND e1.salary != e2.salary " +
@@ -773,7 +771,7 @@ public static class ArrowUtils {
 }
 
 // Usage
-try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data")) {
+try (VectorSchemaRoot result = workspace.query("SELECT * FROM data_csv")) {
     List<String> names = ArrowUtils.getStringColumn(result, "name");
     List<Long> salaries = ArrowUtils.getLongColumn(result, "salary");
     OptionalDouble avgSalary = ArrowUtils.getColumnAverage(result, "salary");
@@ -807,14 +805,14 @@ try (VectorSchemaRoot result = workspace.query("data.csv", "SELECT * FROM data")
 
 ```java
 // ✅ Efficient: Use SQL for complex operations
-try (VectorSchemaRoot result = workspace.query("huge_dataset.csv", 
-    "SELECT department, AVG(salary) as avg_sal FROM data " +
+try (VectorSchemaRoot result = workspace.query( 
+    "SELECT department, AVG(salary) as avg_sal FROM employees_csv " +
     "WHERE hire_date > '2023-01-01' GROUP BY department")) {
     // Process aggregated results
 }
 
 // ❌ Inefficient: Load all data then process in Java
-try (VectorSchemaRoot all = workspace.query("huge_dataset.csv", "SELECT * FROM data")) {
+try (VectorSchemaRoot all = workspace.query("SELECT * FROM huge_dataset_csv")) {
     List<Map<String, Object>> rows = toRowMaps(all); // Memory intensive!
     // Then filter/group in Java collections
 }

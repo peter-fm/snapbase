@@ -251,8 +251,7 @@ public class ComplianceAuditDemo {
         
         try {
             // Query all customer data across snapshots
-            try (VectorSchemaRoot allData = workspace.query(CUSTOMER_DATA_FILE, 
-                    "SELECT snapshot_name, COUNT(*) as record_count FROM data GROUP BY snapshot_name ORDER BY snapshot_name")) {
+            try (VectorSchemaRoot allData = workspace.query("SELECT snapshot_name, COUNT(*) as record_count FROM customer_data_csv GROUP BY snapshot_name ORDER BY snapshot_name")) {
                 
                 System.out.println("   📊 Snapshot Summary:");
                 FieldVector snapshotNames = allData.getVector("snapshot_name");
@@ -266,8 +265,7 @@ public class ComplianceAuditDemo {
             }
             
             // Query for sensitive field changes
-            try (VectorSchemaRoot sensitiveQuery = workspace.query(CUSTOMER_DATA_FILE, 
-                    "SELECT snapshot_name, COUNT(DISTINCT id) as unique_customers FROM data " +
+            try (VectorSchemaRoot sensitiveQuery = workspace.query("SELECT snapshot_name, COUNT(DISTINCT id) as unique_customers FROM customer_data_csv " +
                     "WHERE ssn IS NOT NULL OR email IS NOT NULL GROUP BY snapshot_name")) {
                 
                 System.out.println("   🔒 PII Data Summary:");
@@ -291,9 +289,8 @@ public class ComplianceAuditDemo {
         
         try {
             // First, show basic snapshot information
-            try (VectorSchemaRoot snapshotInfo = workspace.query(CUSTOMER_DATA_FILE, 
-                    "SELECT snapshot_name, COUNT(*) as record_count " +
-                    "FROM data GROUP BY snapshot_name ORDER BY snapshot_name")) {
+            try (VectorSchemaRoot snapshotInfo = workspace.query("SELECT snapshot_name, COUNT(*) as record_count " +
+                    "FROM customer_data_csv GROUP BY snapshot_name ORDER BY snapshot_name")) {
                 
                 System.out.println("   📊 Available snapshots for temporal analysis:");
                 if (snapshotInfo.getRowCount() > 0) {
@@ -316,11 +313,10 @@ public class ComplianceAuditDemo {
         
         try {
             // Find customers whose income changed (using realistic threshold for demo)
-            try (VectorSchemaRoot incomeChanges = workspace.query(CUSTOMER_DATA_FILE, 
-                    "SELECT DISTINCT id, first_name, last_name " +
-                    "FROM data " +
+            try (VectorSchemaRoot incomeChanges = workspace.query("SELECT DISTINCT id, first_name, last_name " +
+                    "FROM customer_data_csv " +
                     "WHERE id IN (" +
-                    "  SELECT id FROM data GROUP BY id " +
+                    "  SELECT id FROM customer_data_csv GROUP BY id " +
                     "  HAVING MAX(annual_income) - MIN(annual_income) > 1000" +
                     ") LIMIT 10")) {
                 
@@ -342,12 +338,11 @@ public class ComplianceAuditDemo {
             }
             
             // Analyze data quality over time
-            try (VectorSchemaRoot qualityMetrics = workspace.query(CUSTOMER_DATA_FILE, 
-                    "SELECT snapshot_name, " +
+            try (VectorSchemaRoot qualityMetrics = workspace.query("SELECT snapshot_name, " +
                     "COUNT(*) as total_records, " +
                     "COUNT(CASE WHEN email LIKE '%@%' THEN 1 END) as valid_emails, " +
                     "COUNT(CASE WHEN ssn IS NOT NULL AND LENGTH(ssn) = 11 THEN 1 END) as valid_ssns " +
-                    "FROM data GROUP BY snapshot_name ORDER BY snapshot_name")) {
+                    "FROM customer_data_csv GROUP BY snapshot_name ORDER BY snapshot_name")) {
                 
                 System.out.println("   📈 Data Quality Metrics Over Time:");
                 for (int i = 0; i < qualityMetrics.getRowCount(); i++) {

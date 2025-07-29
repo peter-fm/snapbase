@@ -104,13 +104,13 @@ class DataQualityDashboard:
         
         for i in range(len(self.snapshots) - 1):
             # Query data for consecutive snapshots
-            current_df = self.workspace.query('customer_data.csv', f"""
-                SELECT {column} FROM data 
+            current_df = self.workspace.query(f"""
+                SELECT {column} FROM customer_data_csv 
                 WHERE snapshot_name = '{self.snapshots[i]}'
             """)
             
-            next_df = self.workspace.query('customer_data.csv', f"""
-                SELECT {column} FROM data 
+            next_df = self.workspace.query(f"""
+                SELECT {column} FROM customer_data_csv 
                 WHERE snapshot_name = '{self.snapshots[i+1]}'
             """)
             
@@ -276,8 +276,8 @@ def main():
                 # Get data for all snapshots
                 all_data = []
                 for snapshot in data['snapshots']:
-                    df = dashboard.workspace.query('customer_data.csv', f"""
-                        SELECT {selected_column} FROM data 
+                    df = dashboard.workspace.query(f"""
+                        SELECT {selected_column} FROM customer_data_csv 
                         WHERE snapshot_name = '{snapshot}'
                     """)
                     df_with_snapshot = df.with_columns(pl.lit(snapshot).alias('snapshot'))
@@ -326,13 +326,13 @@ def main():
             snapshot_info = []
             for i, snapshot in enumerate(data['snapshots']):
                 # Get basic stats for each snapshot
-                stats_df = dashboard.workspace.query('customer_data.csv', f"""
+                stats_df = dashboard.workspace.query(f"""
                     SELECT 
                         COUNT(*) as row_count,
                         AVG(age) as avg_age,
                         AVG(annual_income) as avg_income,
                         AVG(transaction_amount) as avg_transaction
-                    FROM data 
+                    FROM customer_data_csv 
                     WHERE snapshot_name = '{snapshot}'
                 """)
                 

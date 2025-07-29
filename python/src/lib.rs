@@ -105,7 +105,11 @@ impl Workspace {
         }
 
         // Create the snapshot using the same logic as CLI
-        let metadata = create_hive_snapshot(&self.workspace, &input_path, file_path, &snapshot_name)
+        // Extract just the filename for the source name to avoid path separators in view names
+        let source_name = input_path.file_name()
+            .and_then(|os_str| os_str.to_str())
+            .unwrap_or(file_path);
+        let metadata = create_hive_snapshot(&self.workspace, &input_path, source_name, &snapshot_name)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create snapshot: {}", e)))?;
 
         Ok(format!("Created snapshot '{}' with {} rows, {} columns", 
@@ -161,41 +165,11 @@ impl Workspace {
         Ok(changes)
     }
 
-    /// Query historical snapshots using SQL, returning Polars DataFrame for zero-copy performance
-    #[pyo3(signature = (source, sql, limit=None))]
-    fn query(&self, source: &str, sql: &str, limit: Option<usize>) -> PyResult<PyObject> {
-        let mut query_engine = SnapshotQueryEngine::new(self.workspace.clone())
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create query engine: {}", e)))?;
-        
-        // Apply limit if specified
-        let mut final_sql = sql.to_string();
-        if let Some(limit_value) = limit {
-            final_sql = format!("{final_sql} LIMIT {limit_value}");
-        }
-        
-        let arrow_result = query_engine.query_arrow(source, &final_sql)
-            .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {}", e)))?;
-        
-        // Convert Arrow RecordBatch to PyArrow, then to Polars DataFrame
-        Python::with_gil(|py| {
-            // Create PyRecordBatch and convert to PyArrow
-            let py_record_batch = PyRecordBatch::new(arrow_result);
-            let pyarrow_batch = py_record_batch.to_pyarrow(py)?;
-            
-            // Import polars module
-            let polars = py.import("polars")?;
-            
-            // Convert PyArrow RecordBatch to Polars DataFrame using from_arrow
-            let polars_df = polars.call_method1("from_arrow", (pyarrow_batch,))?;
-            
-            Ok(polars_df.into())
-        })
-    }
 
     /// Query across all workspace sources using SQL, returning Polars DataFrame
     /// This enables cross-source joins and snapshot filtering
     #[pyo3(signature = (sql, snapshot_pattern="*", limit=None))]
-    fn workspace_query(&self, sql: &str, snapshot_pattern: Option<&str>, limit: Option<usize>) -> PyResult<PyObject> {
+    fn query(&self, sql: &str, snapshot_pattern: Option<&str>, limit: Option<usize>) -> PyResult<PyObject> {
         // Create DuckDB connection configured for the workspace storage backend
         let connection = create_configured_connection(&self.workspace)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create connection: {}", e)))?;
@@ -221,38 +195,108 @@ impl Workspace {
         let result = execute_query_with_describe(&connection, &final_sql)
             .map_err(|e| PyRuntimeError::new_err(format!("Workspace query failed: {}", e)))?;
 
-        // Convert QueryResult to Arrow RecordBatch for Python consumption
-        use arrow::array::{Array, ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray};
+        // Convert QueryResult to Arrow RecordBatch for Python consumption with proper types
+        use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use std::sync::Arc;
 
-        // Build schema from column names
-        let fields: Vec<Field> = result.columns.iter()
-            .map(|name| Field::new(name, DataType::Utf8, true)) // Use string for all columns for simplicity
-            .collect();
-        let schema = Arc::new(Schema::new(fields));
-
-        // Convert QueryResult rows to Arrow arrays
-        let mut column_builders: Vec<Vec<Option<String>>> = vec![vec![]; result.columns.len()];
+        // Determine column types by examining the first non-null value in each column
+        let mut column_types: Vec<DataType> = vec![DataType::Utf8; result.columns.len()];
         
         for row in &result.rows {
             for (col_idx, value) in row.iter().enumerate() {
-                let string_value = match value {
-                    snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
-                    snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
-                    snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
-                    snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
-                    snapbase_core::query::QueryValue::Null => None,
-                };
-                column_builders[col_idx].push(string_value);
+                if column_types[col_idx] == DataType::Utf8 {
+                    // Only update if we haven't determined the type yet (still default string)
+                    match value {
+                        snapbase_core::query::QueryValue::Integer(_) => {
+                            column_types[col_idx] = DataType::Int64;
+                        }
+                        snapbase_core::query::QueryValue::Float(_) => {
+                            column_types[col_idx] = DataType::Float64;
+                        }
+                        snapbase_core::query::QueryValue::Boolean(_) => {
+                            column_types[col_idx] = DataType::Boolean;
+                        }
+                        snapbase_core::query::QueryValue::String(_) => {
+                            // Keep as Utf8 (default)
+                        }
+                        snapbase_core::query::QueryValue::Null => {
+                            // Skip nulls when determining type
+                        }
+                    }
+                }
             }
         }
 
-        // Build Arrow arrays
-        let arrays: Vec<ArrayRef> = column_builders.into_iter()
-            .map(|column_data| {
-                Arc::new(StringArray::from(column_data)) as ArrayRef
+        // Build schema with proper data types
+        let fields: Vec<Field> = result.columns.iter()
+            .zip(column_types.iter())
+            .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+
+        // Create column builders for each column based on its determined type
+        let mut column_data: Vec<Vec<snapbase_core::query::QueryValue>> = vec![vec![]; result.columns.len()];
+        
+        // Collect all values for each column
+        for row in &result.rows {
+            for (col_idx, value) in row.iter().enumerate() {
+                column_data[col_idx].push(value.clone());
+            }
+        }
+
+        // Build Arrow arrays based on column types
+        let arrays: Vec<ArrayRef> = column_types.iter()
+            .enumerate()
+            .map(|(col_idx, col_type)| {
+                let column_values = &column_data[col_idx];
+                
+                match col_type {
+                    DataType::Int64 => {
+                        let int_values: Vec<Option<i64>> = column_values.iter().map(|v| match v {
+                            snapbase_core::query::QueryValue::Integer(i) => Some(*i),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        }).collect();
+                        Arc::new(Int64Array::from(int_values)) as ArrayRef
+                    }
+                    DataType::Float64 => {
+                        let float_values: Vec<Option<f64>> = column_values.iter().map(|v| match v {
+                            snapbase_core::query::QueryValue::Float(f) => Some(*f),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        }).collect();
+                        Arc::new(Float64Array::from(float_values)) as ArrayRef
+                    }
+                    DataType::Boolean => {
+                        let bool_values: Vec<Option<bool>> = column_values.iter().map(|v| match v {
+                            snapbase_core::query::QueryValue::Boolean(b) => Some(*b),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        }).collect();
+                        Arc::new(BooleanArray::from(bool_values)) as ArrayRef
+                    }
+                    DataType::Utf8 => {
+                        let string_values: Vec<Option<String>> = column_values.iter().map(|v| match v {
+                            snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        }).collect();
+                        Arc::new(StringArray::from(string_values)) as ArrayRef
+                    }
+                    _ => {
+                        // Fallback to string for unknown types
+                        let string_values: Vec<Option<String>> = column_values.iter().map(|v| match v {
+                            snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
+                            snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
+                            snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
+                            snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
+                            snapbase_core::query::QueryValue::Null => None,
+                        }).collect();
+                        Arc::new(StringArray::from(string_values)) as ArrayRef
+                    }
+                }
             })
             .collect();
 
@@ -275,86 +319,6 @@ impl Workspace {
         })
     }
 
-    /// Enhanced query method with snapshot filtering support
-    #[pyo3(signature = (source, sql, snapshot_pattern="*", limit=None))]
-    fn query_with_snapshots(&self, source: &str, sql: &str, snapshot_pattern: Option<&str>, limit: Option<usize>) -> PyResult<PyObject> {
-        // Create DuckDB connection configured for the workspace storage backend
-        let connection = create_configured_connection(&self.workspace)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create connection: {}", e)))?;
-
-        // Use default pattern if not provided
-        let pattern = snapshot_pattern.unwrap_or("*");
-
-        // Build filtered query path using snapshot pattern
-        let query_path = snapbase_core::query_engine::build_snapshot_path_pattern(&self.workspace, source, pattern)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to build snapshot path pattern: {}", e)))?;
-        
-        // Register single source view with snapshot filtering
-        connection.execute(
-            &format!(
-                "CREATE OR REPLACE VIEW data AS SELECT * 
-                 FROM read_parquet('{query_path}', hive_partitioning=true, union_by_name=true)"
-            ),
-            [],
-        ).map_err(|e| PyRuntimeError::new_err(format!("Failed to register filtered view: {}", e)))?;
-
-        // Apply limit if specified
-        let mut final_sql = sql.to_string();
-        if let Some(limit_value) = limit {
-            final_sql = format!("{final_sql} LIMIT {limit_value}");
-        }
-
-        // Execute query using the shared helper function
-        let result = execute_query_with_describe(&connection, &final_sql)
-            .map_err(|e| PyRuntimeError::new_err(format!("Query with snapshots failed: {}", e)))?;
-
-        // Convert QueryResult to Arrow RecordBatch (same logic as workspace_query)
-        use arrow::array::{Array, ArrayRef, StringArray};
-        use arrow::datatypes::{DataType, Field, Schema};
-        use arrow::record_batch::RecordBatch;
-        use std::sync::Arc;
-
-        // Build schema from column names
-        let fields: Vec<Field> = result.columns.iter()
-            .map(|name| Field::new(name, DataType::Utf8, true))
-            .collect();
-        let schema = Arc::new(Schema::new(fields));
-
-        // Convert QueryResult rows to Arrow arrays
-        let mut column_builders: Vec<Vec<Option<String>>> = vec![vec![]; result.columns.len()];
-        
-        for row in &result.rows {
-            for (col_idx, value) in row.iter().enumerate() {
-                let string_value = match value {
-                    snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
-                    snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
-                    snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
-                    snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
-                    snapbase_core::query::QueryValue::Null => None,
-                };
-                column_builders[col_idx].push(string_value);
-            }
-        }
-
-        // Build Arrow arrays
-        let arrays: Vec<ArrayRef> = column_builders.into_iter()
-            .map(|column_data| {
-                Arc::new(StringArray::from(column_data)) as ArrayRef
-            })
-            .collect();
-
-        let arrow_result = RecordBatch::try_new(schema, arrays)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create Arrow batch: {}", e)))?;
-
-        // Convert to Polars DataFrame
-        Python::with_gil(|py| {
-            let py_record_batch = PyRecordBatch::new(arrow_result);
-            let pyarrow_batch = py_record_batch.to_pyarrow(py)?;
-            let polars = py.import("polars")?;
-            let polars_df = polars.call_method1("from_arrow", (pyarrow_batch,))?;
-            Ok(polars_df.into())
-        })
-    }
 
     /// Get workspace path
     fn get_path(&self) -> PyResult<String> {

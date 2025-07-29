@@ -258,7 +258,7 @@ public class ComplianceDashboardController {
             return ResponseEntity.badRequest().body(Map.of("error", "Workspace not available. Please ensure JVM arguments for Apache Arrow are configured."));
         }
         
-        try (VectorSchemaRoot result = getWorkspace().query(CUSTOMER_DATA_FILE, sql)) {
+        try (VectorSchemaRoot result = getWorkspace().query(sql.replace("FROM data", "FROM customer_data_csv"))) {
             Map<String, Object> response = new HashMap<>();
             response.put("rowCount", result.getRowCount());
             response.put("columns", result.getSchema().getFields().stream()

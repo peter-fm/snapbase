@@ -193,28 +193,28 @@ snapbase query "SELECT * FROM orders_csv"                        # All snapshots
 
 ```bash
 # Single-source queries (requires --source parameter)
-snapbase query --source data.csv "SELECT * FROM data WHERE price > 20"
-snapbase query --source data.csv "SELECT * FROM data" --format csv
-snapbase query --source data.csv "SELECT * FROM data WHERE user_id = 101" --snapshot "*_v1"
-snapbase query --source data.csv --list-snapshots
+snapbase query "SELECT * FROM data_csv WHERE price > 20"
+snapbase query "SELECT * FROM data_csv" --format csv
+snapbase query "SELECT * FROM data_csv WHERE user_id = 101" --snapshot "*_v1"
+snapbase query --list-snapshots
 
 # Compare snapshots (see Examples section for detailed patterns)
-snapbase query --source data.csv "
-  SELECT * FROM data 
-  WHERE id NOT IN (SELECT id FROM data WHERE snapshot_name = 'v1_0')
+snapbase query "
+  SELECT * FROM data_csv 
+  WHERE id NOT IN (SELECT id FROM data_csv WHERE snapshot_name = 'v1_0')
 " # Find new records
 
 # Query specific snapshots
-snapbase query --source data.csv "
+snapbase query "
   SELECT COUNT(*) as total_records,
          AVG(price) as avg_price
-  FROM data WHERE snapshot_name = 'v1_0'
+  FROM data_csv WHERE snapshot_name = 'v1_0'
 "
 
 # Query how a product price has changed over time
-snapbase query --source data.csv "
-  SELECT distinct product, price,
-  FROM data WHERE snapshot_timestamp >= '2024-01-1' and snapshot_timestamp < '2025-01-01'
+snapbase query "
+  SELECT distinct product, price
+  FROM data_csv WHERE snapshot_timestamp >= '2024-01-1' and snapshot_timestamp < '2025-01-01'
 "
 ```
 
@@ -469,8 +469,8 @@ snapbase query products.csv "
   SELECT 
     current.*,
     'ADDED' as change_type
-  FROM (SELECT * FROM data WHERE snapshot_name = 'v2_0') current
-  LEFT JOIN (SELECT * FROM data WHERE snapshot_name = 'v1_0') previous ON current.id = previous.id
+  FROM (SELECT * FROM data_csv WHERE snapshot_name = 'v2_0') current
+  LEFT JOIN (SELECT * FROM data_csv WHERE snapshot_name = 'v1_0') previous ON current.id = previous.id
   WHERE previous.id IS NULL
 "
 ```
@@ -482,8 +482,8 @@ snapbase query products.csv "
   SELECT 
     previous.*,
     'REMOVED' as change_type
-  FROM (SELECT * FROM data WHERE snapshot_name = 'v1_0') previous
-  LEFT JOIN (SELECT * FROM data WHERE snapshot_name = 'v2_0') current ON previous.id = current.id
+  FROM (SELECT * FROM data_csv WHERE snapshot_name = 'v1_0') previous
+  LEFT JOIN (SELECT * FROM data_csv WHERE snapshot_name = 'v2_0') current ON previous.id = current.id
   WHERE current.id IS NULL
 "
 ```
@@ -499,8 +499,8 @@ snapbase query products.csv "
     previous.price as previous_price,
     current.price - previous.price as price_change,
     'MODIFIED' as change_type
-  FROM (SELECT * FROM data WHERE snapshot_name = 'v2_0') current
-  JOIN (SELECT * FROM data WHERE snapshot_name = 'v1_0') previous ON current.id = previous.id
+  FROM (SELECT * FROM data_csv WHERE snapshot_name = 'v2_0') current
+  JOIN (SELECT * FROM data_csv WHERE snapshot_name = 'v1_0') previous ON previous.id = current.id
   WHERE current.price != previous.price
      OR current.name != previous.name
 "
@@ -511,8 +511,8 @@ snapbase query products.csv "
 # Get a comprehensive view of all changes
 snapbase query products.csv "
   WITH 
-    current_data AS (SELECT * FROM data WHERE snapshot_name = 'v2_0'),
-    previous_data AS (SELECT * FROM data WHERE snapshot_name = 'v1_0'),
+    current_data AS (SELECT * FROM data_csv WHERE snapshot_name = 'v2_0'),
+    previous_data AS (SELECT * FROM data_csv WHERE snapshot_name = 'v1_0'),
     changes AS (
       -- Added records
       SELECT 
@@ -572,7 +572,7 @@ snapbase query prod-db:users "
     snapshot_name,
     COUNT(*) as user_count,
     COUNT(DISTINCT email) as unique_emails
-  FROM data 
+  FROM data_csv 
   GROUP BY snapshot_name
   ORDER BY snapshot_name
 "
@@ -595,7 +595,7 @@ snapbase query daily_sales.sql "
     total_sales,
     LAG(total_sales) OVER (ORDER BY date) as prev_sales,
     total_sales - LAG(total_sales) OVER (ORDER BY date) as daily_change
-  FROM data 
+  FROM data_csv 
   ORDER BY date DESC 
   LIMIT 7
 "
@@ -698,7 +698,7 @@ snapbase query "
 **Single-source queries with filtering:**
 ```bash
 # Filter specific snapshots for a single source
-snapbase query --source orders.csv "
+snapbase query "
   SELECT product, COUNT(*) as count
   FROM data
   WHERE snapshot_name = 'orders_v1'
@@ -706,7 +706,7 @@ snapbase query --source orders.csv "
 " --snapshot "*_v1"
 
 # Time-based analysis for a single source
-snapbase query --source orders.csv "
+snapbase query "
   SELECT 
     DATE(snapshot_timestamp) as date,
     COUNT(*) as daily_orders

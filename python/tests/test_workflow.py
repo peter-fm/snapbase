@@ -115,9 +115,9 @@ class TestCompleteWorkflow:
             # Export might not be implemented in Python API yet
             print("Export functionality not available in Python API")
         
-        # Test query functionality (equivalent to: snapbase query employees.csv "select * from data")
+        # Test query functionality (equivalent to: snapbase query "select * from employees_csv")
         try:
-            query_result = workspace.query("employees.csv", "SELECT * FROM data")
+            query_result = workspace.query("SELECT * FROM employees_csv")
             
             # Query should return polars DataFrame
             try:
@@ -136,9 +136,9 @@ class TestCompleteWorkflow:
         except Exception as e:
             print(f"Query failed: {e}")
         
-        # Test filtered query (equivalent to: snapbase query employees.csv "select * from data where snapshot_name = 'snap2'")
+        # Test filtered query (equivalent to: snapbase query "select * from employees_csv where snapshot_name = 'snap2'")
         try:
-            filtered_query = workspace.query("employees.csv", f"SELECT * FROM data WHERE snapshot_name = '{snap2_name}'")
+            filtered_query = workspace.query(f"SELECT * FROM employees_csv WHERE snapshot_name = '{snap2_name}'")
             assert filtered_query is not None
             
         except Exception as e:
@@ -334,8 +334,7 @@ class TestWorkflowPerformance:
             import time
             
             start_time = time.time()
-            query_result = workspace.query("large_query_test.csv", 
-                                         "SELECT department, COUNT(*) as count FROM data GROUP BY department")
+            query_result = workspace.query("SELECT department, COUNT(*) as count FROM large_query_test_csv GROUP BY department")
             end_time = time.time()
             
             query_time = end_time - start_time
@@ -374,7 +373,7 @@ class TestWorkflowIntegration:
         # Should be able to access the same workspace and data
         try:
             # Test querying data created by first instance
-            query_result = workspace2.query("persistent.csv", "SELECT * FROM data")
+            query_result = workspace2.query("SELECT * FROM persistent_csv")
             assert query_result is not None
             
             # Test creating another snapshot with second instance
@@ -409,7 +408,7 @@ class TestWorkflowIntegration:
         # Test querying all files
         for i in range(3):
             try:
-                query_result = workspace.query(f"concurrent_{i}.csv", "SELECT COUNT(*) as count FROM data")
+                query_result = workspace.query(f"SELECT COUNT(*) as count FROM concurrent_{i}_csv")
                 assert query_result is not None
             except Exception as e:
                 print(f"Concurrent query {i} failed: {e}")

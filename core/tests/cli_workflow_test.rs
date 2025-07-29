@@ -165,9 +165,9 @@ fn test_complete_cli_workflow() {
     // Content should match the snap2 data (employees_snapshot2.csv)
     assert_eq!(backup_content.trim(), expected_content.trim());
 
-    // Test query functionality (equivalent to: snapbase query employees.csv "select * from data")
+    // Test query functionality (equivalent to: snapbase query "select * from employees_csv")
     let query_output = Command::new(&cli_path)
-        .args(["query", "employees.csv", "select * from data"])
+        .args(["query", "select * from employees_csv"])
         .current_dir(workspace.path())
         .output()
         .expect("Failed to run query");
@@ -186,8 +186,7 @@ fn test_complete_cli_workflow() {
     let query_filtered_output = Command::new(&cli_path)
         .args([
             "query",
-            "employees.csv",
-            "select * from data where snapshot_name = 'snap2'",
+            "select * from employees_csv where snapshot_name = 'snap2'",
         ])
         .current_dir(workspace.path())
         .output()

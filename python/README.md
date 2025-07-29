@@ -121,7 +121,7 @@ import polars as pl
 workspace = snapbase.Workspace("./data")
 
 # Query returns a Polars DataFrame (not JSON!)
-df = workspace.query("data.csv", "SELECT * FROM data WHERE price > 100")
+df = workspace.query("SELECT * FROM data_csv WHERE price > 100")
 
 # Polars DataFrames are powerful and fast
 print(f"Query returned {df.height} rows and {df.width} columns")
@@ -135,12 +135,12 @@ summary = df.group_by("category").agg([
 print(summary)
 
 # Query across multiple snapshots for a single source
-results = workspace.query("data.csv", """
+results = workspace.query("""
     SELECT 
         snapshot_name,
         COUNT(*) as record_count,
         AVG(price) as avg_price
-    FROM data 
+    FROM data_csv 
     GROUP BY snapshot_name
     ORDER BY snapshot_name
 """)
@@ -355,7 +355,7 @@ Execute SQL query against historical snapshots for a single source.
 - `df.to_dict()` - Convert to Python dictionary
 - `df.to_arrow()` - Convert to Arrow Table (zero-copy)
 
-##### `workspace_query(sql: str, snapshot_pattern: str = "*", limit: int = None) -> polars.DataFrame` (New!)
+##### `query(sql: str, snapshot_pattern: str = "*", limit: int = None) -> polars.DataFrame`
 Execute SQL query across all workspace sources with cross-source joins and snapshot filtering.
 
 **Parameters:**
@@ -369,40 +369,22 @@ Execute SQL query across all workspace sources with cross-source joins and snaps
 
 **Returns:** Polars DataFrame with query results
 
-**Example:**
+**Examples:**
 ```python
+# Single source query
+df = workspace.query("SELECT * FROM orders_csv WHERE amount > 100")
+
 # Cross-source query with joins over all snapshots with name ending with "_v1"
-df = workspace.workspace_query("""
+df = workspace.query("""
     SELECT o.id, o.product, o.amount, u.name, u.department
     FROM orders_csv o 
     JOIN users_csv u ON u.id = o.user_id
     WHERE o.amount > 50
 """, snapshot_pattern="*_v1")
 
-```
-
-##### `query_with_snapshots(file_path: str, sql: str, snapshot_pattern: str = "*", limit: int = None) -> polars.DataFrame`
-Execute SQL query against a single source with snapshot filtering.
-
-**Parameters:**
-- `file_path`: Path to the file to query
-- `sql`: SQL query to execute
-- `snapshot_pattern`: Filter snapshots by pattern (default: "*" for all snapshots)
-- `limit`: Optional limit on number of rows returned
-
-**Returns:** Polars DataFrame with query results
-
-**Example:**
-```python
-# Query specific snapshots only
-df = workspace.query_with_snapshots("orders.csv", 
-    "SELECT * FROM data WHERE amount > 100", 
-    snapshot_pattern="*_v1")
-
 # Query latest snapshot only
-latest = workspace.query_with_snapshots("orders.csv",
-    "SELECT COUNT(*) as total FROM data",
-    snapshot_pattern="latest")
+latest = workspace.query("SELECT COUNT(*) as total FROM orders_csv",
+                        snapshot_pattern="latest")
 ```
 
 ##### `export_snapshot(file_path: str, snapshot_name: str, output_path: str)`
@@ -696,7 +678,7 @@ workspace = snapbase.Workspace("./ml_project")
 workspace.create_snapshot("raw_data.csv", name="raw_data")
 
 # Query and process data using Polars (faster than loading files)
-raw_df = workspace.query("raw_data.csv", "SELECT * FROM data")
+raw_df = workspace.query("SELECT * FROM raw_data_csv")
 
 # Process data with Polars (much faster than Pandas)
 processed_df = raw_df.drop_nulls().fill_null(0)  # Your processing logic
@@ -708,8 +690,8 @@ processed_df.write_csv("processed_data.csv")
 workspace.create_snapshot("processed_data.csv", name="processed_v1")
 
 # Compare versions using fast queries
-raw_count = workspace.query("raw_data.csv", "SELECT COUNT(*) as count FROM data").item(0, "count")
-processed_count = workspace.query("processed_data.csv", "SELECT COUNT(*) as count FROM data").item(0, "count")
+raw_count = workspace.query("SELECT COUNT(*) as count FROM raw_data_csv").item(0, "count")
+processed_count = workspace.query("SELECT COUNT(*) as count FROM processed_data_csv").item(0, "count")
 
 print(f"Processing removed {raw_count - processed_count} rows")
 
@@ -799,7 +781,7 @@ workspace.create_snapshot("users.csv", name="users_v1")
 workspace.create_snapshot("products.csv", name="products_v1")
 
 # Cross-source queries with joins
-sales_by_dept = workspace.workspace_query("""
+sales_by_dept = workspace.query("""
     SELECT 
         u.department,
         COUNT(o.id) as total_orders,
@@ -815,7 +797,7 @@ print("Sales by Department:")
 print(sales_by_dept)
 
 # Analyze high-value customers across sources
-high_value_customers = workspace.workspace_query("""
+high_value_customers = workspace.query("""
     SELECT 
         u.name, 
         u.department,
@@ -832,7 +814,7 @@ high_value_customers = workspace.workspace_query("""
 high_value_pandas = high_value_customers.to_pandas()
 
 # Track workspace changes over time
-workspace_summary = workspace.workspace_query("""
+workspace_summary = workspace.query("""
     SELECT 
         'orders' as source,
         snapshot_name,
@@ -859,12 +841,12 @@ for row in workspace_summary.iter_rows(named=True):
     print(f"{row['source']}: {row['snapshot_name']} - {row['record_count']} records")
 
 # Single-source query with snapshot filtering
-recent_orders = workspace.query_with_snapshots("orders.csv", """
+recent_orders = workspace.query("""
     SELECT 
         product,
         COUNT(*) as order_count,
         SUM(amount) as total_sales
-    FROM data
+    FROM orders_csv
     GROUP BY product
     ORDER BY total_sales DESC
 """, snapshot_pattern="*_v1")

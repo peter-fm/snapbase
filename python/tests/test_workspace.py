@@ -56,7 +56,7 @@ class TestWorkspaceOperations:
         workspace.create_snapshot(sample_csv_file.name, "test_data")
         
         # Query the snapshot data
-        result = workspace.query(sample_csv_file.name, "SELECT COUNT(*) as row_count FROM data")
+        result = workspace.query("SELECT COUNT(*) as row_count FROM test_data_csv")
         
         # Query returns a Polars DataFrame, not a string
         try:
@@ -67,6 +67,8 @@ class TestWorkspaceOperations:
             # Verify the count makes sense (should be 3 rows from sample data)
             count_value = result.select("row_count").item()
             assert count_value > 0, "Row count should be positive"
+            # Should be exactly 3 rows from our sample data
+            assert count_value == 3, f"Expected 3 rows, got {count_value}"
         except ImportError:
             # If polars not available, just check it's not a string
             assert not isinstance(result, str), "Query should not return string"
