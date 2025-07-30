@@ -78,8 +78,6 @@ snapbase init
 
 This creates a `.snapbase/` directory in your current folder to store snapshots and configuration.
 
-**⚠️ New in this version**: Single-source queries now require the `--source` parameter. Queries without `--source` are treated as workspace-wide cross-source queries.
-
 ### 2. Create your first snapshot
 
 ```bash
@@ -206,7 +204,6 @@ snapbase query "SELECT * FROM orders_csv"                        # All snapshots
 **Single-Source Queries** - Query individual files with snapshot filtering:
 
 ```bash
-# Single-source queries (requires --source parameter)
 snapbase query "SELECT * FROM data_csv WHERE price > 20"
 snapbase query "SELECT * FROM data_csv" --format csv
 snapbase query "SELECT * FROM data_csv WHERE user_id = 101" --snapshot "*_v1"

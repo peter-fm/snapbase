@@ -2,7 +2,6 @@
 
 Java bindings for Snapbase - a queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
 
-**⚠️ Simplified in this version**: Unified query interface - now just one `query()` method for all workspace queries with zero-copy Arrow performance.
 
 ## Features
 
