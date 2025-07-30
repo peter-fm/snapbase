@@ -159,6 +159,58 @@ else
     print_warn "GitHub Actions workflow file not found"
 fi
 
+# Update README files
+print_info "Updating README files..."
+
+# Update main README.md
+MAIN_README="$SCRIPT_DIR/README.md"
+if [ -f "$MAIN_README" ]; then
+    # Update CLI download links with platform-specific versioned filenames (fix for macOS sed)
+    sed -i.bak "s/snapbase-linux-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-v$NEW_VERSION/g" "$MAIN_README"
+    sed -i.bak "s/snapbase-macos-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-v$NEW_VERSION/g" "$MAIN_README"
+    sed -i.bak "s/snapbase-windows-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-windows-v$NEW_VERSION/g" "$MAIN_README"
+    # Update Java Maven version
+    sed -i.bak "s/<version>[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*<\/version>/<version>$NEW_VERSION<\/version>/" "$MAIN_README"
+    print_info "✓ Updated $MAIN_README"
+else
+    print_warn "Main README.md not found"
+fi
+
+# Update CLI README.md
+CLI_README="$SCRIPT_DIR/cli/README.md"
+if [ -f "$CLI_README" ]; then
+    # Update CLI download links with platform-specific versioned filenames (fix for macOS sed)
+    sed -i.bak "s/snapbase-linux-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-v$NEW_VERSION/g" "$CLI_README"
+    sed -i.bak "s/snapbase-macos-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-v$NEW_VERSION/g" "$CLI_README"
+    sed -i.bak "s/snapbase-windows-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-windows-v$NEW_VERSION/g" "$CLI_README"
+    print_info "✓ Updated $CLI_README"
+else
+    print_warn "CLI README.md not found"
+fi
+
+# Update Python README.md
+PYTHON_README="$SCRIPT_DIR/python/README.md"
+if [ -f "$PYTHON_README" ]; then
+    # Python README likely has version references in examples or installation instructions (fix for macOS sed)
+    sed -i.bak "s/version=[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/version=$NEW_VERSION/g" "$PYTHON_README"
+    print_info "✓ Updated $PYTHON_README"
+else
+    print_warn "Python README.md not found"
+fi
+
+# Update Java README.md
+JAVA_README="$SCRIPT_DIR/java/README.md"
+if [ -f "$JAVA_README" ]; then
+    # Update Java Maven version references (fix for macOS sed)
+    sed -i.bak "s/<version>[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*<\/version>/<version>$NEW_VERSION<\/version>/g" "$JAVA_README"
+    sed -i.bak "s/snapbase-java-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-$NEW_VERSION/g" "$JAVA_README"
+    # Update JAR download links
+    sed -i.bak "s/snapbase-java-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-v$NEW_VERSION/g" "$JAVA_README"
+    print_info "✓ Updated $JAVA_README"
+else
+    print_warn "Java README.md not found"
+fi
+
 # Clean up backup files
 print_info "Cleaning up backup files..."
 find "$SCRIPT_DIR" -name "*.bak" -delete
@@ -175,6 +227,7 @@ print_info "  Python project: $CURRENT_PYTHON_VERSION → $NEW_VERSION"
 print_info "  Python Cargo: $CURRENT_PYTHON_CARGO_VERSION → $NEW_VERSION"
 print_info "  Python module: $CURRENT_INIT_VERSION → $NEW_VERSION"
 print_info "  GitHub Actions: Updated JAR references"
+print_info "  README files: Updated installation instructions with new version"
 print_info ""
 print_info "Next steps:"
 print_info "  1. Review the changes: git diff"

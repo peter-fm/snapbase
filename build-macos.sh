@@ -4,6 +4,11 @@ set -e
 echo "Building Snapbase for macOS..."
 echo
 
+# Extract version from Cargo.toml
+VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+echo "Building version: $VERSION"
+echo
+
 echo "Step 1: Building CLI (Rust)..."
 cargo build --release
 echo "CLI build completed successfully"
@@ -31,20 +36,20 @@ echo "Python bindings build completed successfully"
 echo
 
 echo "Step 5: Creating distribution directories..."
-mkdir -p dist/windows dist/linux dist/python
+mkdir -p dist/macos
 echo "Distribution directories created"
 echo
 
 echo "Step 6: Copying artifacts to distribution..."
-cp target/release/snapbase-cli dist/linux/
-cp java/target/snapbase-*.jar dist/linux/
-cp python/target/wheels/*.whl dist/python/
+cp target/release/snapbase dist/macos/snapbase-macos-v${VERSION}
+cp java/target/snapbase-*fat.jar dist/macos/snapbase-macos-v${VERSION}.jar
+cp target/wheels/*.whl dist/macos/snapbase-macos-v${VERSION}.whl
 echo "Artifacts copied to distribution"
 echo
 
 echo "All builds completed successfully!"
 echo
 echo "Distribution outputs:"
-echo "- macOS CLI: dist/linux/snapbase-cli"
-echo "- macOS JAR: dist/linux/snapbase-*.jar"
-echo "- Python wheel: dist/python/*.whl"
+echo "- macOS CLI: dist/macos/snapbase-macos-v${VERSION}"
+echo "- macOS JAR: dist/macos/snapbase-macos-v${VERSION}.jar"
+echo "- Python wheel: dist/macos/snapbase-macos-v${VERSION}.whl"

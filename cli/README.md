@@ -22,21 +22,21 @@ Download the latest release for your platform:
 
 #### Linux (x86_64)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-x64 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-v0.1.5 -o snapbase
 chmod +x snapbase
 sudo mv snapbase /usr/local/bin/
 ```
 
 #### macOS (ARM64/Apple Silicon)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-arm64 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-v0.1.5 -o snapbase
 chmod +x snapbase
 sudo mv snapbase /usr/local/bin/
 ```
 
 #### Windows (x86_64)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-windows-x64.exe -o snapbase.exe
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-windows-v0.1.5.exe -o snapbase.exe
 # Add snapbase.exe to your PATH
 ```
 

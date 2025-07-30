@@ -1,7 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -e
 
 echo "Building Snapbase for Linux..."
+echo
+
+# Extract version from Cargo.toml
+VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+echo "Building version: $VERSION"
 echo
 
 echo "Step 1: Building CLI (Rust)..."
@@ -36,15 +41,15 @@ echo "Distribution directories created"
 echo
 
 echo "Step 6: Copying artifacts to distribution..."
-cp target/release/snapbase-cli dist/linux/
-cp java/target/snapbase-*fat.jar dist/linux/
-cp target/wheels/*.whl dist/python/
+cp target/release/snapbase dist/linux/snapbase-linux-v${VERSION}
+cp java/target/snapbase-*fat.jar dist/linux/snapbase-linux-v${VERSION}.jar
+cp target/wheels/*.whl dist/linux/snapbase-linux-v${VERSION}.whl
 echo "Artifacts copied to distribution"
 echo
 
 echo "All builds completed successfully!"
 echo
 echo "Distribution outputs:"
-echo "- Linux CLI: dist/linux/snapbase-cli"
-echo "- Linux JAR: dist/linux/snapbase-*.jar"
-echo "- Python wheel: dist/python/*.whl"
+echo "- Linux CLI: dist/linux/snapbase-linux-v${VERSION}"
+echo "- Linux JAR: dist/linux/snapbase-linux-v${VERSION}.jar"
+echo "- Linux wheel: dist/linux/snapbase-linux-v${VERSION}.whl"

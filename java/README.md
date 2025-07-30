@@ -23,17 +23,52 @@ Java bindings for Snapbase - a queryable time machine for your structured data f
 
 ## Installation
 
-### Using Maven
+### Option 1: From GitHub Releases (Recommended)
 
-Add the dependency to your `pom.xml`:
+1. **Download the fat JAR** from the latest release:
+   ```bash
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   ```
 
-```xml
-<dependency>
-    <groupId>com.snapbase</groupId>
-    <artifactId>snapbase-java</artifactId>
-    <version>version</version>
-</dependency>
+2. **Install to your local Maven repository**:
+   ```bash
+   mvn install:install-file \
+     -Dfile=snapbase-java-0.1.5.jar \
+     -DgroupId=com.snapbase \
+     -DartifactId=snapbase-java \
+     -Dversion=0.1.5 \
+     -Dpackaging=jar
+   ```
+
+3. **Add dependency to your `pom.xml`**:
+   ```xml
+   <dependency>
+       <groupId>com.snapbase</groupId>
+       <artifactId>snapbase-java</artifactId>
+       <version>0.1.5</version>
+   </dependency>
+   ```
+
+### Option 2: Build from Source
+
+To build and install from source:
+
+```bash
+git clone https://github.com/peter-fm/snapbase.git
+cd snapbase
+./build-java.sh
+cd java
+mvn clean install
 ```
+
+This will:
+1. Build the Rust JNI bindings
+2. Compile the Java wrapper
+3. Create a fat JAR with all dependencies and native libraries
+4. Install it to your local Maven repository (`~/.m2/repository/`)
+5. Make it available to any Maven project on your system
+
+### Required JVM Configuration
 
 **Required for Arrow support**: Add JVM arguments to your application:
 
@@ -53,21 +88,14 @@ Or when running your application:
 java --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED -jar your-app.jar
 ```
 
-### Installing to Local Maven Repository
+### Verification
 
-To install the JAR to your local Maven repository for use in other projects:
-
+Once installed, you can verify the installation by checking your local repository:
 ```bash
-cd java
-mvn clean install
+ls ~/.m2/repository/com/snapbase/snapbase-java/0.1.5/
 ```
 
-This will:
-1. Build the complete JAR with all dependencies and native libraries
-2. Install it to your local Maven repository (`~/.m2/repository/`)
-3. Make it available to any Maven project on your system
-
-Once installed, you can use it in any Maven project with the dependency above. The JAR is self-contained and includes everything needed to run Snapbase.
+The fat JAR is self-contained and includes everything needed to run Snapbase, including native libraries for your platform.
 
 ## Quick Start
 

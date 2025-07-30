@@ -5,7 +5,10 @@
 
 set -e
 
-echo "🦀 Building Snapbase Java API..."
+# Extract version from Cargo.toml
+VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+echo "🦀 Building Snapbase Java API v${VERSION}..."
 
 # Check if required tools are installed
 if ! command -v cargo &> /dev/null; then
@@ -42,14 +45,14 @@ mvn package
 echo "✅ Build completed successfully!"
 echo ""
 echo "📁 Artifacts created:"
-echo "   - JAR: java/target/snapbase-java-0.1.0.jar"
-echo "   - Sources: java/target/snapbase-java-0.1.0-sources.jar"
-echo "   - Javadoc: java/target/snapbase-java-0.1.0-javadoc.jar"
+echo "   - JAR: java/target/snapbase-java-${VERSION}.jar"
+echo "   - Sources: java/target/snapbase-java-${VERSION}-sources.jar"
+echo "   - Javadoc: java/target/snapbase-java-${VERSION}-javadoc.jar"
 echo "   - Native library: java-bindings/target/release/libsnapbase_java.so (Linux/macOS)"
 echo ""
 echo "🚀 To use in your project, add the JAR to your classpath:"
-echo "   mvn install:install-file -Dfile=java/target/snapbase-java-0.1.0.jar \\"
+echo "   mvn install:install-file -Dfile=java/target/snapbase-java-${VERSION}.jar \\"
 echo "                           -DgroupId=com.snapbase \\"
 echo "                           -DartifactId=snapbase-java \\"
-echo "                           -Dversion=0.1.0 \\"
+echo "                           -Dversion=${VERSION} \\"
 echo "                           -Dpackaging=jar"
