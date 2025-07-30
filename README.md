@@ -73,7 +73,9 @@ snapbase status data.csv
 # Snapshot the new state
 snapbase snapshot data.csv --name updated
 # Explore back in time!
-snapbase query data.csv "select * from data where snapshot_name = 'initial'" 
+snapbase query "select * from data_csv where snapshot_name = 'initial'" 
+# or
+snapbase query "select * from data_csv" --snapshot initial
 # Revert csv back
 snapbase export data.csv --to initial --file data.csv --force
 ```
@@ -90,7 +92,7 @@ changes = workspace.status("data.csv", baseline="initial")
 # Snapshot the new state
 workspace.create_snapshot("data.csv", name="updated")
 # Explore back in time!
-df = workspace.query("data.csv", "select * from data where snapshot_name = 'initial'")
+df = workspace.query("select * from data_csv where snapshot_name = 'initial'")
 print(df)
 workspace.export("data.csv", output_file="data.csv", to_snapshot="initial", force=True)
 ```
@@ -114,7 +116,7 @@ try (SnapbaseWorkspace workspace = new SnapbaseWorkspace("/path/to/workspace")) 
     workspace.createSnapshot("data.csv", "updated");
     
     // Explore back in time!
-    String results = workspace.query("data.csv", "select * from data where snapshot_name = 'initial'");
+    String results = workspace.query("select * from data_csv where snapshot_name = 'initial'");
     System.out.println(results);
     
     // Revert csv back
