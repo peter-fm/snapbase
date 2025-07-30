@@ -25,9 +25,22 @@ Java bindings for Snapbase - a queryable time machine for your structured data f
 
 ### Option 1: From GitHub Releases (Recommended)
 
-1. **Download the fat JAR** from the latest release:
+1. **Download the fat JAR** for your platform (contains platform-specific native libraries):
    ```bash
-   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   # Linux x86_64
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-linux-x86_64-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   
+   # Linux ARM64
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-linux-arm64-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   
+   # macOS Apple Silicon
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-macos-apple-silicon-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   
+   # macOS Intel
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-macos-intel-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   
+   # Windows x86_64
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-windows-x86_64-v0.1.5.jar -o snapbase-java-0.1.5.jar
    ```
 
 2. **Install to your local Maven repository**:
@@ -68,24 +81,222 @@ This will:
 4. Install it to your local Maven repository (`~/.m2/repository/`)
 5. Make it available to any Maven project on your system
 
-### Required JVM Configuration
+## Running Java Applications
 
-**Required for Arrow support**: Add JVM arguments to your application:
+Snapbase requires specific JVM arguments for Apache Arrow memory management. Here are practical patterns for different scenarios:
 
+### Required JVM Arguments
+
+All Snapbase Java applications need these JVM flags:
+```bash
+--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED
+```
+
+### Maven Project Setup
+
+#### 1. Maven Surefire Plugin (for tests)
 ```xml
-<!-- In Maven Surefire for tests -->
 <plugin>
     <groupId>org.apache.maven.plugins</groupId>
     <artifactId>maven-surefire-plugin</artifactId>
+    <version>3.0.0-M9</version>
     <configuration>
         <argLine>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED</argLine>
     </configuration>
 </plugin>
 ```
 
-Or when running your application:
+#### 2. Maven Exec Plugin (for running main classes)
+```xml
+<plugin>
+    <groupId>org.codehaus.mojo</groupId>
+    <artifactId>exec-maven-plugin</artifactId>
+    <version>3.1.0</version>
+    <configuration>
+        <mainClass>com.example.MyApp</mainClass>
+        <args>
+            <arg>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED</arg>
+            <arg>--enable-native-access=ALL-UNNAMED</arg>
+        </args>
+    </configuration>
+</plugin>
+```
+
+#### 3. Spring Boot Applications
+```xml
+<plugin>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-maven-plugin</artifactId>
+    <configuration>
+        <jvmArguments>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED</jvmArguments>
+    </configuration>
+</plugin>
+```
+
+### Command Line Patterns
+
+#### 1. Direct Java Execution
 ```bash
-java --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED -jar your-app.jar
+java --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED \
+     --enable-native-access=ALL-UNNAMED \
+     -cp your-app.jar:snapbase-java-0.1.5.jar \
+     com.example.MyApp
+```
+
+#### 2. Running with Maven (using MAVEN_OPTS)
+```bash
+# Set environment variable for all Maven commands
+export MAVEN_OPTS="--add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED"
+
+# Run with exec:java
+mvn exec:java -Dexec.mainClass="com.example.MyApp"
+
+# Run Spring Boot application
+mvn spring-boot:run
+
+# Run tests
+mvn test
+```
+
+#### 3. Running with Maven (per-command)
+```bash
+# For exec:java
+mvn exec:java \
+    -Dexec.mainClass="com.example.MyApp" \
+    -Dexec.args="--add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED"
+
+# For Spring Boot
+mvn spring-boot:run \
+    -Dspring-boot.run.jvmArguments="--add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED"
+```
+
+### Production Deployment
+
+#### 1. JAR Execution
+```bash
+java --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED \
+     --enable-native-access=ALL-UNNAMED \
+     -jar your-snapbase-app.jar
+```
+
+#### 2. Docker Deployment
+```dockerfile
+FROM openjdk:11-jre-slim
+
+COPY your-app.jar /app/app.jar
+COPY snapbase-java-0.1.5.jar /app/lib/
+
+ENTRYPOINT ["java", \
+    "--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED", \
+    "--enable-native-access=ALL-UNNAMED", \
+    "-jar", "/app/app.jar"]
+```
+
+#### 3. SystemD Service
+```ini
+[Unit]
+Description=Snapbase Application
+After=network.target
+
+[Service]
+Type=simple
+User=appuser
+ExecStart=/usr/bin/java \
+    --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED \
+    --enable-native-access=ALL-UNNAMED \
+    -jar /opt/myapp/app.jar
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### IDE Configuration
+
+#### IntelliJ IDEA
+1. Go to **Run** → **Edit Configurations**
+2. Select your application configuration
+3. In **VM options**, add:
+   ```
+   --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED
+   ```
+
+#### Eclipse
+1. Right-click your project → **Run As** → **Run Configurations**
+2. Select **Java Application** → your application
+3. Go to **Arguments** tab
+4. In **VM arguments**, add:
+   ```
+   --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED
+   ```
+
+#### VS Code
+Add to your `.vscode/launch.json`:
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Launch MyApp",
+            "request": "launch",
+            "mainClass": "com.example.MyApp",
+            "vmArgs": "--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --enable-native-access=ALL-UNNAMED"
+        }
+    ]
+}
+```
+
+### Troubleshooting
+
+#### Common Issues and Solutions
+
+**Issue**: `InaccessibleObjectException` or `IllegalAccessError`
+```
+Solution: Ensure JVM arguments are properly set. Check that arguments are passed to the JVM, not the application.
+```
+
+**Issue**: `UnsatisfiedLinkError` - native library not found
+```
+Solution: Verify you're using the correct platform-specific JAR from releases, or that native libraries are in your path.
+```
+
+**Issue**: Arrow memory allocation errors
+```
+Solution: Increase JVM heap size with -Xmx flag, ensure --enable-native-access=ALL-UNNAMED is set.
+```
+
+**Issue**: Maven doesn't pick up JVM arguments
+```bash
+# Verify MAVEN_OPTS is set
+echo $MAVEN_OPTS
+
+# Or use plugin-specific configuration instead of MAVEN_OPTS
+mvn spring-boot:run -Dspring-boot.run.jvmArguments="..."
+```
+
+#### Verification Script
+
+Create a test script to verify your setup:
+```bash
+#!/bin/bash
+echo "Testing Snapbase Java setup..."
+
+# Test with Maven
+export MAVEN_OPTS="--add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED"
+
+mvn clean compile
+if [ $? -ne 0 ]; then
+    echo "❌ Build failed"
+    exit 1
+fi
+
+mvn exec:java -Dexec.mainClass="com.snapbase.SnapbaseWorkspace" -Dexec.args="--version" -q
+if [ $? -eq 0 ]; then
+    echo "✅ Snapbase Java setup is working correctly"
+else
+    echo "❌ Setup verification failed"
+fi
 ```
 
 ### Verification
@@ -410,8 +621,10 @@ try (VectorSchemaRoot results = workspace.query(
     // Process data efficiently
     for (int i = 0; i < results.getRowCount(); i++) {
         // Access row data directly from Arrow vectors
-        System.out.println("Product: " + nameColumn.getObject(i) + 
-                          ", Price: " + priceColumn.getObject(i));
+        // Always check for nulls and use toString() for strings
+        String productName = nameColumn.isNull(i) ? null : nameColumn.getObject(i).toString();
+        Object priceValue = priceColumn.isNull(i) ? null : priceColumn.getObject(i);
+        System.out.println("Product: " + productName + ", Price: " + priceValue);
     }
 }
 
@@ -474,7 +687,7 @@ try (VectorSchemaRoot aggregated = workspace.query(
     FieldVector avgVector = aggregated.getVector("avg_order_value");
     
     for (int i = 0; i < aggregated.getRowCount(); i++) {
-        String dept = (String) deptVector.getObject(i);
+        String dept = deptVector.getObject(i).toString();
         Long orders = (Long) countVector.getObject(i);  
         Double revenue = (Double) revenueVector.getObject(i);
         Double avgOrder = (Double) avgVector.getObject(i);
@@ -495,7 +708,7 @@ try (VectorSchemaRoot evolution = workspace.query(
     
     System.out.println("=== Orders Evolution ===");
     for (int i = 0; i < evolution.getRowCount(); i++) {
-        String snapshot = (String) evolution.getVector("snapshot_name").getObject(i);
+        String snapshot = evolution.getVector("snapshot_name").getObject(i).toString();
         Long count = (Long) evolution.getVector("record_count").getObject(i);
         Double avgAmount = (Double) evolution.getVector("avg_amount").getObject(i);
         
@@ -518,7 +731,7 @@ try (VectorSchemaRoot filtered = workspace.query(
     FieldVector salesVector = filtered.getVector("total_sales");
     
     for (int i = 0; i < filtered.getRowCount(); i++) {
-        String product = (String) productVector.getObject(i);
+        String product = productVector.getObject(i).toString();
         Long count = (Long) countVector.getObject(i);
         Double sales = (Double) salesVector.getObject(i);
         
@@ -567,8 +780,9 @@ try (VectorSchemaRoot result = workspace.query("SELECT * FROM employees_csv")) {
     // Extract values into Java types using getObject()
     for (int i = 0; i < result.getRowCount(); i++) {
         // Always check for null values first
+        // Use direct casting for numbers, toString() for strings (Arrow may return different string types)
         Integer id = idColumn.isNull(i) ? null : (Integer) idColumn.getObject(i);
-        String name = nameColumn.isNull(i) ? null : (String) nameColumn.getObject(i);
+        String name = nameColumn.isNull(i) ? null : nameColumn.getObject(i).toString();
         Long salary = salaryColumn.isNull(i) ? null : (Long) salaryColumn.getObject(i);
         
         System.out.printf("ID: %d, Name: %s, Salary: %d%n", id, name, salary);
@@ -664,7 +878,7 @@ try (VectorSchemaRoot grouped = workspace.query(
     FieldVector maxVector = grouped.getVector("max_salary");
     
     for (int i = 0; i < grouped.getRowCount(); i++) {
-        String dept = (String) deptVector.getObject(i);
+        String dept = deptVector.getObject(i).toString();
         Long count = (Long) countVector.getObject(i);
         Double avgSalary = (Double) avgVector.getObject(i);
         Long minSalary = (Long) minVector.getObject(i);
@@ -755,7 +969,7 @@ try (VectorSchemaRoot changes = workspace.query(
     
     System.out.println("=== Salary Changes ===");
     for (int i = 0; i < changes.getRowCount(); i++) {
-        String name = (String) changes.getVector("name").getObject(i);
+        String name = changes.getVector("name").getObject(i).toString();
         Long oldSalary = (Long) changes.getVector("old_salary").getObject(i);
         Long newSalary = (Long) changes.getVector("new_salary").getObject(i);
         Long change = (Long) changes.getVector("salary_change").getObject(i);
@@ -775,7 +989,7 @@ public static class ArrowUtils {
         List<String> values = new ArrayList<>();
         
         for (int i = 0; i < vector.getValueCount(); i++) {
-            values.add(vector.isNull(i) ? null : (String) vector.getObject(i));
+            values.add(vector.isNull(i) ? null : vector.getObject(i).toString());
         }
         return values;
     }

@@ -165,10 +165,12 @@ print_info "Updating README files..."
 # Update main README.md
 MAIN_README="$SCRIPT_DIR/README.md"
 if [ -f "$MAIN_README" ]; then
-    # Update CLI download links with platform-specific versioned filenames (fix for macOS sed)
-    sed -i.bak "s/snapbase-linux-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-v$NEW_VERSION/g" "$MAIN_README"
-    sed -i.bak "s/snapbase-macos-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-v$NEW_VERSION/g" "$MAIN_README"
-    sed -i.bak "s/snapbase-windows-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-windows-v$NEW_VERSION/g" "$MAIN_README"
+    # Update CLI download links with architecture-based versioned filenames (fix for macOS sed)
+    sed -i.bak "s/snapbase-linux-[a-z0-9_]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-x86_64-v$NEW_VERSION/g" "$MAIN_README"
+    sed -i.bak "s/snapbase-linux-arm64-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-arm64-v$NEW_VERSION/g" "$MAIN_README"
+    sed -i.bak "s/snapbase-macos-[a-z-]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-apple-silicon-v$NEW_VERSION/g" "$MAIN_README"
+    sed -i.bak "s/snapbase-macos-intel-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-intel-v$NEW_VERSION/g" "$MAIN_README"
+    sed -i.bak "s/snapbase-windows-[a-z0-9_]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-windows-x86_64-v$NEW_VERSION/g" "$MAIN_README"
     # Update Java Maven version
     sed -i.bak "s/<version>[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*<\/version>/<version>$NEW_VERSION<\/version>/" "$MAIN_README"
     print_info "✓ Updated $MAIN_README"
@@ -179,10 +181,12 @@ fi
 # Update CLI README.md
 CLI_README="$SCRIPT_DIR/cli/README.md"
 if [ -f "$CLI_README" ]; then
-    # Update CLI download links with platform-specific versioned filenames (fix for macOS sed)
-    sed -i.bak "s/snapbase-linux-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-v$NEW_VERSION/g" "$CLI_README"
-    sed -i.bak "s/snapbase-macos-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-v$NEW_VERSION/g" "$CLI_README"
-    sed -i.bak "s/snapbase-windows-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-windows-v$NEW_VERSION/g" "$CLI_README"
+    # Update CLI download links with architecture-based versioned filenames (fix for macOS sed)
+    sed -i.bak "s/snapbase-linux-[a-z0-9_]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-x86_64-v$NEW_VERSION/g" "$CLI_README"
+    sed -i.bak "s/snapbase-linux-arm64-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-linux-arm64-v$NEW_VERSION/g" "$CLI_README"
+    sed -i.bak "s/snapbase-macos-[a-z-]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-apple-silicon-v$NEW_VERSION/g" "$CLI_README"
+    sed -i.bak "s/snapbase-macos-intel-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-macos-intel-v$NEW_VERSION/g" "$CLI_README"
+    sed -i.bak "s/snapbase-windows-[a-z0-9_]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-windows-x86_64-v$NEW_VERSION/g" "$CLI_README"
     print_info "✓ Updated $CLI_README"
 else
     print_warn "CLI README.md not found"
@@ -204,8 +208,12 @@ if [ -f "$JAVA_README" ]; then
     # Update Java Maven version references (fix for macOS sed)
     sed -i.bak "s/<version>[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*<\/version>/<version>$NEW_VERSION<\/version>/g" "$JAVA_README"
     sed -i.bak "s/snapbase-java-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-$NEW_VERSION/g" "$JAVA_README"
-    # Update JAR download links
-    sed -i.bak "s/snapbase-java-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-v$NEW_VERSION/g" "$JAVA_README"
+    # Update architecture-specific JAR download links
+    sed -i.bak "s/snapbase-java-linux-[a-z0-9_]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-linux-x86_64-v$NEW_VERSION/g" "$JAVA_README"
+    sed -i.bak "s/snapbase-java-linux-arm64-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-linux-arm64-v$NEW_VERSION/g" "$JAVA_README"
+    sed -i.bak "s/snapbase-java-macos-[a-z-]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-macos-apple-silicon-v$NEW_VERSION/g" "$JAVA_README"
+    sed -i.bak "s/snapbase-java-macos-intel-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-macos-intel-v$NEW_VERSION/g" "$JAVA_README"
+    sed -i.bak "s/snapbase-java-windows-[a-z0-9_]*-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*/snapbase-java-windows-x86_64-v$NEW_VERSION/g" "$JAVA_README"
     print_info "✓ Updated $JAVA_README"
 else
     print_warn "Java README.md not found"

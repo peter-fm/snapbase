@@ -5,8 +5,8 @@
 
 set -e
 
-# Extract version from Cargo.toml
-VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+# Extract version from Cargo.toml (handle both Unix and Windows line endings)
+VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/' | tr -d '\r')
 
 echo "🦀 Building Snapbase Java API v${VERSION}..."
 
