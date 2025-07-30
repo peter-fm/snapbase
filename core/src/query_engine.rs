@@ -203,11 +203,13 @@ pub fn build_snapshot_path_pattern(
     snapshot_pattern: &str,
 ) -> Result<String> {
     let base_path = format!("sources/{source}");
-    
+
     match snapshot_pattern {
         "*" => {
             // All snapshots - use double wildcard for all snapshot directories
-            Ok(workspace.storage().get_duckdb_path(&format!("{base_path}/**/*.parquet")))
+            Ok(workspace
+                .storage()
+                .get_duckdb_path(&format!("{base_path}/**/*.parquet")))
         }
         "latest" => {
             // Need to find the latest snapshot for this source
@@ -225,7 +227,7 @@ pub fn build_snapshot_path_pattern(
                     Err(_) => None,
                 }
             });
-            
+
             if let Some(latest) = latest_snapshot {
                 // Build specific path for the latest snapshot
                 let pattern = format!("{base_path}/snapshot_name={latest}/*/data.parquet");
@@ -250,9 +252,8 @@ pub fn register_workspace_source_views(
     snapshot_pattern: &str,
 ) -> Result<HashMap<String, String>> {
     let rt = tokio::runtime::Runtime::new()?;
-    let all_snapshots = rt.block_on(async {
-        workspace.storage().list_snapshots_for_all_sources().await
-    })?;
+    let all_snapshots =
+        rt.block_on(async { workspace.storage().list_snapshots_for_all_sources().await })?;
 
     let mut registered_views = HashMap::new();
 
@@ -271,7 +272,7 @@ pub fn register_workspace_source_views(
         );
 
         connection.execute(&create_view_sql, [])?;
-        
+
         log::debug!("Registered workspace view '{view_name}' for source '{source}' with pattern '{snapshot_pattern}'");
         registered_views.insert(source, view_name);
     }

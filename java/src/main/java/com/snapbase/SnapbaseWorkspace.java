@@ -164,25 +164,23 @@ public class SnapbaseWorkspace implements Closeable {
     /**
      * Query historical snapshots using SQL with zero-copy Arrow return.
      * 
-     * @param source Source file or pattern
      * @param sql SQL query to execute
      * @return VectorSchemaRoot containing query results with zero-copy performance
      * @throws SnapbaseException if query fails
      */
-    public VectorSchemaRoot query(String source, String sql) throws SnapbaseException {
-        return query(source, sql, null);
+    public VectorSchemaRoot query(String sql) throws SnapbaseException {
+        return query(sql, null);
     }
     
     /**
      * Query historical snapshots using SQL with a limit and zero-copy Arrow return.
      * 
-     * @param source Source file or pattern
      * @param sql SQL query to execute
      * @param limit Optional limit on number of results
      * @return VectorSchemaRoot containing query results with zero-copy performance
      * @throws SnapbaseException if query fails
      */
-    public VectorSchemaRoot query(String source, String sql, Integer limit) throws SnapbaseException {
+    public VectorSchemaRoot query(String sql, Integer limit) throws SnapbaseException {
         checkHandle();
         
         // Apply limit if specified
@@ -193,7 +191,7 @@ public class SnapbaseWorkspace implements Closeable {
              ArrowSchema arrowSchema = ArrowSchema.allocateNew(allocator)) {
             
             // Call native method with C structure pointers
-            nativeQueryArrow(nativeHandle, source, finalSql, 
+            nativeQueryArrow(nativeHandle, finalSql, 
                            arrowArray.memoryAddress(), 
                            arrowSchema.memoryAddress());
             
@@ -205,13 +203,12 @@ public class SnapbaseWorkspace implements Closeable {
     /**
      * Query historical snapshots and get row count efficiently.
      * 
-     * @param source Source file or pattern
      * @param sql SQL query to execute
      * @return Number of rows in the result
      * @throws SnapbaseException if query fails
      */
-    public int queryRowCount(String source, String sql) throws SnapbaseException {
-        try (VectorSchemaRoot result = query(source, sql)) {
+    public int queryRowCount(String sql) throws SnapbaseException {
+        try (VectorSchemaRoot result = query(sql)) {
             return result.getRowCount();
         }
     }
@@ -219,14 +216,13 @@ public class SnapbaseWorkspace implements Closeable {
     /**
      * Query historical snapshots and access data by column name.
      * 
-     * @param source Source file or pattern
      * @param sql SQL query to execute
      * @param columnName Column name to access
      * @return FieldVector for the specified column
      * @throws SnapbaseException if query fails or column not found
      */
-    public FieldVector queryColumn(String source, String sql, String columnName) throws SnapbaseException {
-        VectorSchemaRoot result = query(source, sql);
+    public FieldVector queryColumn(String sql, String columnName) throws SnapbaseException {
+        VectorSchemaRoot result = query(sql);
         FieldVector column = result.getVector(columnName);
         if (column == null) {
             result.close();
@@ -475,7 +471,7 @@ public class SnapbaseWorkspace implements Closeable {
     private static native void nativeInit(long handle) throws SnapbaseException;
     private static native String nativeCreateSnapshot(long handle, String filePath, String name) throws SnapbaseException;
     private static native ChangeDetectionResult nativeStatus(long handle, String filePath, String baseline) throws SnapbaseException;
-    private static native void nativeQueryArrow(long handle, String source, String sql, long arrayPtr, long schemaPtr) throws SnapbaseException;
+    private static native void nativeQueryArrow(long handle, String sql, long arrayPtr, long schemaPtr) throws SnapbaseException;
     private static native String nativeGetPath(long handle) throws SnapbaseException;
     private static native List<String> nativeListSnapshots(long handle) throws SnapbaseException;
     private static native List<String> nativeListSnapshotsForSource(long handle, String sourcePath) throws SnapbaseException;

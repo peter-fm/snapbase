@@ -844,10 +844,9 @@ fn query_command(
     if list_snapshots {
         // List all snapshots across all sources
         let rt = tokio::runtime::Runtime::new()?;
-        let all_snapshots = rt.block_on(async {
-            workspace.storage().list_snapshots_for_all_sources().await
-        })?;
-        
+        let all_snapshots =
+            rt.block_on(async { workspace.storage().list_snapshots_for_all_sources().await })?;
+
         println!("📊 Available snapshots across workspace:");
         if all_snapshots.is_empty() {
             println!("   No snapshots found.");
@@ -883,9 +882,7 @@ fn query_command(
 
     // Execute workspace-wide query
     let sql_str = sql.ok_or_else(|| {
-        SnapbaseError::invalid_input(
-            "SQL query is required for workspace queries".to_string()
-        )
+        SnapbaseError::invalid_input("SQL query is required for workspace queries".to_string())
     })?;
 
     let mut final_sql = sql_str.to_string();

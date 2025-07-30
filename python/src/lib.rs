@@ -13,7 +13,7 @@ use snapbase_core::{
     change_detection::StreamingChangeDetector,
     resolver::SnapshotResolver,
     snapshot::SnapshotMetadata,
-    query::{SnapshotQueryEngine, execute_query_with_describe},
+    query::execute_query_with_describe,
     query_engine::{create_configured_connection, register_workspace_source_views},
     naming::SnapshotNamer,
     config::get_snapshot_config_with_workspace,

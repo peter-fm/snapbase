@@ -111,8 +111,8 @@ public class WorkspacePathTest {
             assertTrue(snapshotExists, "Snapshot should exist in workspace .snapbase directory");
             
             // Test querying works from the workspace
-            try (var result_vsr = workspace.query("test_data.csv", 
-                "SELECT COUNT(*) as count FROM data WHERE snapshot_name = 'test_snapshot'")) {
+            try (var result_vsr = workspace.query(
+                "SELECT COUNT(*) as count FROM test_data_csv WHERE snapshot_name = 'test_snapshot'")) {
                 assertTrue(result_vsr.getRowCount() > 0, "Should be able to query snapshot from workspace");
             }
         }

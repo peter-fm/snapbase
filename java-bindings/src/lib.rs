@@ -11,12 +11,14 @@ use jni::JNIEnv;
 use std::path::{Path, PathBuf};
 
 use snapbase_core::{
-    change_detection::StreamingChangeDetector, config::get_snapshot_config_with_workspace,
-    naming::SnapshotNamer, query::execute_query_with_describe, 
+    change_detection::StreamingChangeDetector,
+    config::get_snapshot_config_with_workspace,
+    naming::SnapshotNamer,
+    query::execute_query_with_describe,
     query_engine::{create_configured_connection, register_workspace_source_views},
     resolver::SnapshotResolver,
-    snapshot::SnapshotMetadata, ExportFormat, ExportOptions, Result as SnapbaseResult,
-    SnapbaseWorkspace, UnifiedExporter,
+    snapshot::SnapshotMetadata,
+    ExportFormat, ExportOptions, Result as SnapbaseResult, SnapbaseWorkspace, UnifiedExporter,
 };
 
 /// Wrapper for SnapbaseWorkspace that can be safely passed through JNI
@@ -805,27 +807,17 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeStatus<'local>(
     }
 }
 
-
-/// Query a specific source file with SQL
+/// Query workspace sources with SQL (workspace-wide queries)
 #[no_mangle]
 pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     handle: jlong,
-    source: JString<'local>,
     sql: JString<'local>,
     array_ptr: jlong,
     schema_ptr: jlong,
 ) {
     let workspace_handle = unsafe { &mut *(handle as *mut WorkspaceHandle) };
-
-    let source_str = match jstring_to_string(&mut env, &source) {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = env.throw_new("com/snapbase/SnapbaseException", "Failed to convert source");
-            return;
-        }
-    };
 
     let sql_str = match jstring_to_string(&mut env, &sql) {
         Ok(s) => s,
@@ -847,26 +839,34 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'loc
         }
     };
 
-    // Register view for the specific source (per-source query like the original API)
-    let view_name = snapbase_core::query_engine::sanitize_view_name(&source_str);
-    if let Err(e) = snapbase_core::query_engine::register_hive_view(&connection, &workspace_handle.workspace, &source_str, &view_name) {
+    // Register workspace-wide views (all sources with * pattern)
+    let registered_views =
+        match register_workspace_source_views(&connection, &workspace_handle.workspace, "*") {
+            Ok(views) => views,
+            Err(e) => {
+                let _ = env.throw_new(
+                    "com/snapbase/SnapbaseException",
+                    format!("Failed to register workspace views: {e}"),
+                );
+                return;
+            }
+        };
+
+    if registered_views.is_empty() {
         let _ = env.throw_new(
             "com/snapbase/SnapbaseException",
-            format!("Failed to register source view: {e}"),
+            "No sources found in workspace",
         );
         return;
     }
 
-    // Replace "data" in the SQL with the actual view name to maintain API compatibility
-    let final_sql = sql_str.replace("FROM data", &format!("FROM {}", view_name));
-
     // Execute query using the shared helper function
-    let result = match execute_query_with_describe(&connection, &final_sql) {
+    let result = match execute_query_with_describe(&connection, &sql_str) {
         Ok(res) => res,
         Err(e) => {
             let _ = env.throw_new(
                 "com/snapbase/SnapbaseException",
-                format!("Source query failed: {e}"),
+                format!("Workspace query failed: {e}"),
             );
             return;
         }
@@ -887,7 +887,6 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeQueryArrow<'loc
     // Export to C Data Interface for zero-copy transfer to Java
     export_arrow_to_ffi(&mut env, record_batch, array_ptr, schema_ptr);
 }
-
 
 /// Get workspace path
 #[no_mangle]
@@ -1489,7 +1488,9 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeClose<'local>(
 }
 
 /// Convert QueryResult to Arrow RecordBatch with proper type preservation
-fn query_result_to_arrow(result: &snapbase_core::query::QueryResult) -> SnapbaseResult<arrow::record_batch::RecordBatch> {
+fn query_result_to_arrow(
+    result: &snapbase_core::query::QueryResult,
+) -> SnapbaseResult<arrow::record_batch::RecordBatch> {
     use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -1497,7 +1498,7 @@ fn query_result_to_arrow(result: &snapbase_core::query::QueryResult) -> Snapbase
 
     // Determine column types by examining the first non-null value in each column
     let mut column_types: Vec<DataType> = vec![DataType::Utf8; result.columns.len()];
-    
+
     for row in &result.rows {
         for (col_idx, value) in row.iter().enumerate() {
             if column_types[col_idx] == DataType::Utf8 {
@@ -1524,15 +1525,18 @@ fn query_result_to_arrow(result: &snapbase_core::query::QueryResult) -> Snapbase
     }
 
     // Build schema with proper data types
-    let fields: Vec<Field> = result.columns.iter()
+    let fields: Vec<Field> = result
+        .columns
+        .iter()
         .zip(column_types.iter())
         .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
         .collect();
     let schema = Arc::new(Schema::new(fields));
 
     // Create column builders for each column based on its determined type
-    let mut column_data: Vec<Vec<snapbase_core::query::QueryValue>> = vec![vec![]; result.columns.len()];
-    
+    let mut column_data: Vec<Vec<snapbase_core::query::QueryValue>> =
+        vec![vec![]; result.columns.len()];
+
     // Collect all values for each column
     for row in &result.rows {
         for (col_idx, value) in row.iter().enumerate() {
@@ -1541,61 +1545,80 @@ fn query_result_to_arrow(result: &snapbase_core::query::QueryResult) -> Snapbase
     }
 
     // Build Arrow arrays based on column types
-    let arrays: Vec<ArrayRef> = column_types.iter()
+    let arrays: Vec<ArrayRef> = column_types
+        .iter()
         .enumerate()
         .map(|(col_idx, col_type)| {
             let column_values = &column_data[col_idx];
-            
+
             match col_type {
                 DataType::Int64 => {
-                    let int_values: Vec<Option<i64>> = column_values.iter().map(|v| match v {
-                        snapbase_core::query::QueryValue::Integer(i) => Some(*i),
-                        snapbase_core::query::QueryValue::Null => None,
-                        _ => None, // Should not happen if type detection worked
-                    }).collect();
+                    let int_values: Vec<Option<i64>> = column_values
+                        .iter()
+                        .map(|v| match v {
+                            snapbase_core::query::QueryValue::Integer(i) => Some(*i),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        })
+                        .collect();
                     Arc::new(Int64Array::from(int_values)) as ArrayRef
                 }
                 DataType::Float64 => {
-                    let float_values: Vec<Option<f64>> = column_values.iter().map(|v| match v {
-                        snapbase_core::query::QueryValue::Float(f) => Some(*f),
-                        snapbase_core::query::QueryValue::Null => None,
-                        _ => None, // Should not happen if type detection worked
-                    }).collect();
+                    let float_values: Vec<Option<f64>> = column_values
+                        .iter()
+                        .map(|v| match v {
+                            snapbase_core::query::QueryValue::Float(f) => Some(*f),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        })
+                        .collect();
                     Arc::new(Float64Array::from(float_values)) as ArrayRef
                 }
                 DataType::Boolean => {
-                    let bool_values: Vec<Option<bool>> = column_values.iter().map(|v| match v {
-                        snapbase_core::query::QueryValue::Boolean(b) => Some(*b),
-                        snapbase_core::query::QueryValue::Null => None,
-                        _ => None, // Should not happen if type detection worked
-                    }).collect();
+                    let bool_values: Vec<Option<bool>> = column_values
+                        .iter()
+                        .map(|v| match v {
+                            snapbase_core::query::QueryValue::Boolean(b) => Some(*b),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        })
+                        .collect();
                     Arc::new(BooleanArray::from(bool_values)) as ArrayRef
                 }
                 DataType::Utf8 => {
-                    let string_values: Vec<Option<String>> = column_values.iter().map(|v| match v {
-                        snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
-                        snapbase_core::query::QueryValue::Null => None,
-                        _ => None, // Should not happen if type detection worked
-                    }).collect();
+                    let string_values: Vec<Option<String>> = column_values
+                        .iter()
+                        .map(|v| match v {
+                            snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
+                            snapbase_core::query::QueryValue::Null => None,
+                            _ => None, // Should not happen if type detection worked
+                        })
+                        .collect();
                     Arc::new(StringArray::from(string_values)) as ArrayRef
                 }
                 _ => {
                     // Fallback to string for unknown types
-                    let string_values: Vec<Option<String>> = column_values.iter().map(|v| match v {
-                        snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
-                        snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
-                        snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
-                        snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
-                        snapbase_core::query::QueryValue::Null => None,
-                    }).collect();
+                    let string_values: Vec<Option<String>> = column_values
+                        .iter()
+                        .map(|v| match v {
+                            snapbase_core::query::QueryValue::String(s) => Some(s.clone()),
+                            snapbase_core::query::QueryValue::Integer(i) => Some(i.to_string()),
+                            snapbase_core::query::QueryValue::Float(f) => Some(f.to_string()),
+                            snapbase_core::query::QueryValue::Boolean(b) => Some(b.to_string()),
+                            snapbase_core::query::QueryValue::Null => None,
+                        })
+                        .collect();
                     Arc::new(StringArray::from(string_values)) as ArrayRef
                 }
             }
         })
         .collect();
 
-    RecordBatch::try_new(schema, arrays)
-        .map_err(|e| snapbase_core::error::SnapbaseError::data_processing(format!("Failed to create Arrow batch: {e}")))
+    RecordBatch::try_new(schema, arrays).map_err(|e| {
+        snapbase_core::error::SnapbaseError::data_processing(format!(
+            "Failed to create Arrow batch: {e}"
+        ))
+    })
 }
 
 /// Export Arrow RecordBatch to FFI structures for Java consumption

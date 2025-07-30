@@ -34,17 +34,17 @@ impl SnapbaseWorkspace {
     pub fn root(&self) -> &Path {
         self.path_resolver.workspace_root()
     }
-    
+
     /// Get the .snapbase directory path (compatibility method)
     pub fn snapbase_dir(&self) -> PathBuf {
         self.path_resolver.storage_base().to_path_buf()
     }
-    
+
     /// Get the diffs directory path (compatibility method)
     pub fn diffs_dir(&self) -> PathBuf {
         self.path_resolver.resolve_storage_path("diffs")
     }
-    
+
     /// Get the path resolver
     pub fn path_resolver(&self) -> &PathResolver {
         &self.path_resolver
@@ -57,8 +57,10 @@ impl SnapbaseWorkspace {
             let path_resolver = PathResolver::new(workspace_path.to_path_buf())?;
 
             // Get storage configuration for the workspace
-            let config = crate::config::get_storage_config_with_workspace(Some(path_resolver.workspace_root()))?;
-            
+            let config = crate::config::get_storage_config_with_workspace(Some(
+                path_resolver.workspace_root(),
+            ))?;
+
             let storage_backend = create_storage_backend(&config).await?;
 
             // Create workspace with PathResolver
@@ -526,7 +528,7 @@ default_name_pattern = "{}"
                 // For workspace configs, always use absolute path to prevent current directory dependencies
                 // Always use workspace_root/.snapbase to ensure workspace isolation
                 let config_path = self.path_resolver.storage_base();
-                
+
                 // Ensure the path is always absolute - this is a critical fix for workspace isolation
                 let absolute_path = if config_path.is_absolute() {
                     config_path.to_path_buf()
@@ -535,7 +537,7 @@ default_name_pattern = "{}"
                     // but we're adding this as a safeguard
                     self.path_resolver.workspace_root().join(config_path)
                 };
-                
+
                 format!(
                     r#"
 [storage.local]

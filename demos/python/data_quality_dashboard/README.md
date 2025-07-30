@@ -31,7 +31,7 @@ This demo showcases how to use Snapbase with statistical analysis to monitor dat
 ### Statistical Analysis
 - Calculates Jensen-Shannon divergence between consecutive snapshots
 - JS divergence ranges from 0 (identical distributions) to 1 (completely different)
-- Configurable threshold for anomaly detection (default: 0.4)
+- Configurable threshold for anomaly detection (default: 0.45)
 
 ### Dashboard Features
 - **Overview**: Time series of JS divergence with anomaly threshold

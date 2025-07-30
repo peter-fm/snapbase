@@ -191,13 +191,13 @@ def main():
                 "Anomaly Threshold", 
                 min_value=0.0, 
                 max_value=1.0, 
-                value=0.4, 
+                value=0.45, 
                 step=0.01,
                 help="JS divergence values above this threshold indicate anomalies"
             )
         else:
             st.info("👆 Click 'Generate Demo Data' to start")
-            threshold = 0.15
+            threshold = 0.45
     
     # Main dashboard
     if st.session_state.data_ready:

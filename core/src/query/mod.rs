@@ -142,17 +142,17 @@ pub struct SnapshotInfo {
 pub fn execute_query_with_describe(connection: &Connection, sql: &str) -> Result<QueryResult> {
     // Use DESCRIBE to get column information first
     let describe_sql = format!("DESCRIBE {sql}");
-    let mut describe_stmt = connection.prepare(&describe_sql).map_err(|e| {
-        SnapbaseError::invalid_input(format!("Failed to describe query: {e}"))
-    })?;
+    let mut describe_stmt = connection
+        .prepare(&describe_sql)
+        .map_err(|e| SnapbaseError::invalid_input(format!("Failed to describe query: {e}")))?;
 
     let mut columns = Vec::new();
-    let describe_rows = describe_stmt.query_map([], |row| {
-        let column_name: String = row.get(0)?;
-        Ok(column_name)
-    }).map_err(|e| {
-        SnapbaseError::invalid_input(format!("Failed to get query schema: {e}"))
-    })?;
+    let describe_rows = describe_stmt
+        .query_map([], |row| {
+            let column_name: String = row.get(0)?;
+            Ok(column_name)
+        })
+        .map_err(|e| SnapbaseError::invalid_input(format!("Failed to get query schema: {e}")))?;
 
     for row_result in describe_rows {
         let column_name = row_result.map_err(|e| {
@@ -162,66 +162,81 @@ pub fn execute_query_with_describe(connection: &Connection, sql: &str) -> Result
     }
 
     // Now execute the actual query
-    let mut stmt = connection.prepare(sql).map_err(|e| {
-        SnapbaseError::invalid_input(format!("Failed to prepare query: {e}"))
-    })?;
+    let mut stmt = connection
+        .prepare(sql)
+        .map_err(|e| SnapbaseError::invalid_input(format!("Failed to prepare query: {e}")))?;
 
     let column_count = columns.len();
-    let rows_result = stmt.query_map([], |row| {
-        let mut row_values = Vec::new();
-        for i in 0..column_count {
-            let value = match row.get::<usize, duckdb::types::Value>(i) {
-                Ok(duckdb::types::Value::Null) => QueryValue::Null,
-                Ok(duckdb::types::Value::Boolean(b)) => QueryValue::Boolean(b),
-                Ok(duckdb::types::Value::TinyInt(i)) => QueryValue::Integer(i as i64),
-                Ok(duckdb::types::Value::SmallInt(i)) => QueryValue::Integer(i as i64),
-                Ok(duckdb::types::Value::Int(i)) => QueryValue::Integer(i as i64),
-                Ok(duckdb::types::Value::BigInt(i)) => QueryValue::Integer(i),
-                Ok(duckdb::types::Value::UTinyInt(i)) => QueryValue::Integer(i as i64),
-                Ok(duckdb::types::Value::USmallInt(i)) => QueryValue::Integer(i as i64),
-                Ok(duckdb::types::Value::UInt(i)) => QueryValue::Integer(i as i64),
-                Ok(duckdb::types::Value::UBigInt(i)) => QueryValue::Integer(i as i64),
-                Ok(duckdb::types::Value::HugeInt(i)) => {
-                    // HugeInt is i128, try to convert to i64, or use string representation if too big
-                    if let Ok(i64_val) = i.try_into() {
-                        QueryValue::Integer(i64_val)
-                    } else {
-                        QueryValue::String(i.to_string())
+    let rows_result = stmt
+        .query_map([], |row| {
+            let mut row_values = Vec::new();
+            for i in 0..column_count {
+                let value = match row.get::<usize, duckdb::types::Value>(i) {
+                    Ok(duckdb::types::Value::Null) => QueryValue::Null,
+                    Ok(duckdb::types::Value::Boolean(b)) => QueryValue::Boolean(b),
+                    Ok(duckdb::types::Value::TinyInt(i)) => QueryValue::Integer(i as i64),
+                    Ok(duckdb::types::Value::SmallInt(i)) => QueryValue::Integer(i as i64),
+                    Ok(duckdb::types::Value::Int(i)) => QueryValue::Integer(i as i64),
+                    Ok(duckdb::types::Value::BigInt(i)) => QueryValue::Integer(i),
+                    Ok(duckdb::types::Value::UTinyInt(i)) => QueryValue::Integer(i as i64),
+                    Ok(duckdb::types::Value::USmallInt(i)) => QueryValue::Integer(i as i64),
+                    Ok(duckdb::types::Value::UInt(i)) => QueryValue::Integer(i as i64),
+                    Ok(duckdb::types::Value::UBigInt(i)) => QueryValue::Integer(i as i64),
+                    Ok(duckdb::types::Value::HugeInt(i)) => {
+                        // HugeInt is i128, try to convert to i64, or use string representation if too big
+                        if let Ok(i64_val) = i.try_into() {
+                            QueryValue::Integer(i64_val)
+                        } else {
+                            QueryValue::String(i.to_string())
+                        }
                     }
-                }
-                Ok(duckdb::types::Value::Float(f)) => QueryValue::Float(f as f64),
-                Ok(duckdb::types::Value::Double(f)) => QueryValue::Float(f),
-                Ok(duckdb::types::Value::Text(s)) => QueryValue::String(s),
-                Ok(duckdb::types::Value::Blob(b)) => QueryValue::String(format!("BLOB({} bytes)", b.len())),
-                Ok(duckdb::types::Value::Date32(d)) => QueryValue::String(format!("Date({})", d)),
-                Ok(duckdb::types::Value::Time64(t, _)) => QueryValue::String(format!("Time({:?})", t)),
-                Ok(duckdb::types::Value::Timestamp(ts, _)) => QueryValue::String(format!("Timestamp({:?})", ts)),
-                Ok(duckdb::types::Value::Interval { months, days, nanos }) => {
-                    QueryValue::String(format!("Interval({} months, {} days, {} nanos)", months, days, nanos))
-                }
-                Ok(duckdb::types::Value::Decimal(d)) => QueryValue::String(d.to_string()),
-                Ok(duckdb::types::Value::Enum(s)) => QueryValue::String(s),
-                Ok(duckdb::types::Value::List(l)) => {
-                    QueryValue::String(format!("List({} items)", l.len()))
-                }
-                Ok(duckdb::types::Value::Struct(s)) => {
-                    QueryValue::String(format!("Struct({} fields)", s.iter().count()))
-                }
-                Ok(duckdb::types::Value::Map(m)) => {
-                    QueryValue::String(format!("Map({} entries)", m.iter().count()))
-                }
-                Ok(duckdb::types::Value::Array(a)) => {
-                    QueryValue::String(format!("Array({} items)", a.len()))
-                }
-                Ok(duckdb::types::Value::Union(u)) => QueryValue::String(format!("Union({:?})", u)),
-                Err(_) => QueryValue::Null,
-            };
-            row_values.push(value);
-        }
-        Ok(row_values)
-    }).map_err(|e| {
-        SnapbaseError::invalid_input(format!("Query execution failed: {e}"))
-    })?;
+                    Ok(duckdb::types::Value::Float(f)) => QueryValue::Float(f as f64),
+                    Ok(duckdb::types::Value::Double(f)) => QueryValue::Float(f),
+                    Ok(duckdb::types::Value::Text(s)) => QueryValue::String(s),
+                    Ok(duckdb::types::Value::Blob(b)) => {
+                        QueryValue::String(format!("BLOB({} bytes)", b.len()))
+                    }
+                    Ok(duckdb::types::Value::Date32(d)) => {
+                        QueryValue::String(format!("Date({})", d))
+                    }
+                    Ok(duckdb::types::Value::Time64(t, _)) => {
+                        QueryValue::String(format!("Time({:?})", t))
+                    }
+                    Ok(duckdb::types::Value::Timestamp(ts, _)) => {
+                        QueryValue::String(format!("Timestamp({:?})", ts))
+                    }
+                    Ok(duckdb::types::Value::Interval {
+                        months,
+                        days,
+                        nanos,
+                    }) => QueryValue::String(format!(
+                        "Interval({} months, {} days, {} nanos)",
+                        months, days, nanos
+                    )),
+                    Ok(duckdb::types::Value::Decimal(d)) => QueryValue::String(d.to_string()),
+                    Ok(duckdb::types::Value::Enum(s)) => QueryValue::String(s),
+                    Ok(duckdb::types::Value::List(l)) => {
+                        QueryValue::String(format!("List({} items)", l.len()))
+                    }
+                    Ok(duckdb::types::Value::Struct(s)) => {
+                        QueryValue::String(format!("Struct({} fields)", s.iter().count()))
+                    }
+                    Ok(duckdb::types::Value::Map(m)) => {
+                        QueryValue::String(format!("Map({} entries)", m.iter().count()))
+                    }
+                    Ok(duckdb::types::Value::Array(a)) => {
+                        QueryValue::String(format!("Array({} items)", a.len()))
+                    }
+                    Ok(duckdb::types::Value::Union(u)) => {
+                        QueryValue::String(format!("Union({:?})", u))
+                    }
+                    Err(_) => QueryValue::Null,
+                };
+                row_values.push(value);
+            }
+            Ok(row_values)
+        })
+        .map_err(|e| SnapbaseError::invalid_input(format!("Query execution failed: {e}")))?;
 
     // Collect all rows
     let mut rows = Vec::new();

@@ -183,7 +183,9 @@ impl SnapshotCreator {
                 ws,
             )?;
         } else {
-            return Err(SnapbaseError::workspace("Workspace context required for Hive snapshot creation"));
+            return Err(SnapbaseError::workspace(
+                "Workspace context required for Hive snapshot creation",
+            ));
         }
 
         // Archive creation removed - using Hive-style storage only
@@ -263,20 +265,21 @@ impl SnapshotCreator {
             .unwrap_or("unknown");
 
         // Create Hive directory structure path using storage backend abstraction
-        let hive_path_str = path_utils::join_for_storage_backend(&[
-            "sources",
-            source_name,
-            &format!("snapshot_name={name}"),
-            &format!("snapshot_timestamp={timestamp}")
-        ], workspace.storage());
+        let hive_path_str = path_utils::join_for_storage_backend(
+            &[
+                "sources",
+                source_name,
+                &format!("snapshot_name={name}"),
+                &format!("snapshot_timestamp={timestamp}"),
+            ],
+            workspace.storage(),
+        );
 
         // Create async runtime for storage operations
         let rt = tokio::runtime::Runtime::new()?;
-        
+
         // Ensure directory exists using storage backend
-        rt.block_on(async {
-            workspace.storage().ensure_directory(&hive_path_str).await
-        })?;
+        rt.block_on(async { workspace.storage().ensure_directory(&hive_path_str).await })?;
 
         // Create metadata.json
         let metadata = serde_json::json!({
@@ -295,10 +298,13 @@ impl SnapshotCreator {
 
         let metadata_path = format!("{hive_path_str}/metadata.json");
         let metadata_bytes = serde_json::to_string_pretty(&metadata)?.as_bytes().to_vec();
-        
+
         // Write metadata using storage backend
         rt.block_on(async {
-            workspace.storage().write_file(&metadata_path, &metadata_bytes).await
+            workspace
+                .storage()
+                .write_file(&metadata_path, &metadata_bytes)
+                .await
         })?;
 
         // Create data.parquet using DuckDB COPY (only if full_data is true)

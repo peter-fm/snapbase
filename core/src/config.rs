@@ -419,7 +419,7 @@ pub fn get_storage_config_with_workspace(
 
     // 2. Fall back to global config → env vars → defaults
     let mut config = get_storage_config()?;
-    
+
     // If we have a workspace path and the config uses local storage with relative path,
     // resolve it relative to the workspace, not current directory
     if let Some(workspace_path) = workspace_path {
@@ -434,7 +434,7 @@ pub fn get_storage_config_with_workspace(
             }
         }
     }
-    
+
     Ok(config)
 }
 

@@ -135,7 +135,10 @@ class SnapbaseWorkspaceTest {
         // Query the data using just the filename (like CLI does)
         String sourceFile = testDataFile.getFileName().toString(); // "test_data.csv"
         
-        try (VectorSchemaRoot result = workspace.query(sourceFile, "SELECT * FROM data", 10)) {
+        // Generate table name from actual file name (e.g., "test_data_12345678.csv" -> "test_data_12345678_csv")
+        String tableName = sourceFile.replace(".csv", "_csv");
+        
+        try (VectorSchemaRoot result = workspace.query("SELECT * FROM " + tableName, 10)) {
             assertNotNull(result);
             
             // Debug: Print actual row count
@@ -154,7 +157,7 @@ class SnapbaseWorkspaceTest {
             assertNotNull(nameColumn, "Should have name column");
             
             // Test row count helper method
-            int rowCount = workspace.queryRowCount(sourceFile, "SELECT * FROM data");
+            int rowCount = workspace.queryRowCount("SELECT * FROM " + tableName);
             assertTrue(rowCount > 0, "Should have at least some rows from helper method");
         }
     }
@@ -166,9 +169,10 @@ class SnapbaseWorkspaceTest {
         workspace.createSnapshot(testDataFile.toString(), snapshotName);
         
         String sourceFile = testDataFile.getFileName().toString();
+        String tableName = sourceFile.replace(".csv", "_csv");
         
         // Test accessing specific column
-        try (FieldVector idColumn = workspace.queryColumn(sourceFile, "SELECT id FROM data", "id")) {
+        try (FieldVector idColumn = workspace.queryColumn("SELECT id FROM " + tableName, "id")) {
             assertNotNull(idColumn);
             // May not be IntVector due to Arrow conversion, just check it's a FieldVector
             assertTrue(idColumn instanceof FieldVector);
@@ -176,7 +180,7 @@ class SnapbaseWorkspaceTest {
         
         // Test error for non-existent column
         assertThrows(SnapbaseException.class, () -> {
-            workspace.queryColumn(sourceFile, "SELECT id FROM data", "non_existent_column");
+            workspace.queryColumn("SELECT id FROM " + tableName, "non_existent_column");
         });
     }
     
@@ -187,12 +191,13 @@ class SnapbaseWorkspaceTest {
         workspace.createSnapshot(testDataFile.toString(), snapshotName);
         
         String sourceFile = testDataFile.getFileName().toString();
+        String tableName = sourceFile.replace(".csv", "_csv");
         
         // Test that multiple queries work efficiently with zero-copy
         long startTime = System.nanoTime();
         
         for (int i = 0; i < 10; i++) {
-            try (VectorSchemaRoot result = workspace.query(sourceFile, "SELECT * FROM data LIMIT 5")) {
+            try (VectorSchemaRoot result = workspace.query("SELECT * FROM " + tableName + " LIMIT 5")) {
                 assertTrue(result.getRowCount() > 0);
             }
         }
@@ -271,7 +276,7 @@ class SnapbaseWorkspaceTest {
         
         // Test query with non-existent source
         assertThrows(SnapbaseException.class, () -> {
-            workspace.query("non_existent.csv", "SELECT * FROM data");
+            workspace.query("SELECT * FROM non_existent_csv");
         });
     }
     

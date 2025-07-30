@@ -159,8 +159,8 @@ class WorkflowTest {
             System.out.println("Export functionality failed: " + e.getMessage());
             
             // Fall back to query verification if export fails
-            try (VectorSchemaRoot result = workspace.query("employees.csv", 
-                    "SELECT * FROM data WHERE snapshot_name = '" + snapshotName + "'")) {
+            try (VectorSchemaRoot result = workspace.query(
+                    "SELECT * FROM employees_csv WHERE snapshot_name = '" + snapshotName + "'")) {
                 assertNotNull(result);
                 assertTrue(result.getRowCount() > 0);
                 System.out.println("Fallback: Verified " + snapshotName + " data via query");
@@ -171,8 +171,8 @@ class WorkflowTest {
     }
     
     private void testQueryFunctionality(String snap2Name, String baselineName) throws SnapbaseException {
-        // Test basic query (equivalent to: snapbase query employees.csv "select * from data")
-        try (VectorSchemaRoot basicResult = workspace.query("employees.csv", "SELECT * FROM data")) {
+        // Test basic query (workspace-wide query)
+        try (VectorSchemaRoot basicResult = workspace.query("SELECT * FROM employees_csv")) {
             assertNotNull(basicResult);
             assertTrue(basicResult.getRowCount() > 0);
             assertTrue(basicResult.getFieldVectors().size() >= 5); // id, name, department, salary, hire_date
@@ -187,9 +187,9 @@ class WorkflowTest {
             System.out.println("Query test: Basic query returned " + basicResult.getRowCount() + " rows");
         }
         
-        // Test filtered query (equivalent to: snapbase query employees.csv "select * from data where snapshot_name = 'snap2'")
-        try (VectorSchemaRoot filteredResult = workspace.query("employees.csv", 
-                "SELECT * FROM data WHERE snapshot_name = '" + snap2Name + "'")) {
+        // Test filtered query
+        try (VectorSchemaRoot filteredResult = workspace.query(
+                "SELECT * FROM employees_csv WHERE snapshot_name = '" + snap2Name + "'")) {
             assertNotNull(filteredResult);
             // Should have fewer rows than total (only snap2 data)
             
@@ -197,8 +197,8 @@ class WorkflowTest {
         }
         
         // Test aggregation query
-        try (VectorSchemaRoot aggResult = workspace.query("employees.csv", 
-                "SELECT department, COUNT(*) as count FROM data WHERE snapshot_name = '" + baselineName + "' GROUP BY department")) {
+        try (VectorSchemaRoot aggResult = workspace.query(
+                "SELECT department, COUNT(*) as count FROM employees_csv WHERE snapshot_name = '" + baselineName + "' GROUP BY department")) {
             assertNotNull(aggResult);
             assertTrue(aggResult.getRowCount() > 0);
             
@@ -277,7 +277,7 @@ class WorkflowTest {
         
         // Test query with non-existent source
         assertThrows(SnapbaseException.class, () -> {
-            workspace.query("nonexistent.csv", "SELECT * FROM data");
+            workspace.query("SELECT * FROM nonexistent_csv");
         });
     }
     
@@ -385,7 +385,7 @@ class WorkflowTest {
             assertTrue(workspace2.snapshotExists(persistentSnapshotName));
             
             // Test querying data created by first instance
-            try (VectorSchemaRoot result = workspace2.query("persistent.csv", "SELECT * FROM data")) {
+            try (VectorSchemaRoot result = workspace2.query("SELECT * FROM persistent_csv")) {
                 assertNotNull(result);
                 assertTrue(result.getRowCount() > 0);
             }
@@ -430,8 +430,8 @@ class WorkflowTest {
         
         // Test querying all files
         for (int i = 0; i < 3; i++) {
-            try (VectorSchemaRoot result = workspace.query("concurrent_" + i + ".csv", 
-                    "SELECT COUNT(*) as count FROM data")) {
+            try (VectorSchemaRoot result = workspace.query(
+                    "SELECT COUNT(*) as count FROM concurrent_" + i + "_csv")) {
                 assertNotNull(result);
                 assertTrue(result.getRowCount() >= 0);
             }

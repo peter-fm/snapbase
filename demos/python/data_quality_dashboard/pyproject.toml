@@ -15,4 +15,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-snapbase = { path = "../../python" }
+snapbase = { path = "../../../python" }

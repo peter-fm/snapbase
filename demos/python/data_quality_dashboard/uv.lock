@@ -118,7 +118,7 @@ requires-dist = [
     { name = "plotly", specifier = ">=5.15.0" },
     { name = "polars", specifier = ">=0.19.0" },
     { name = "scipy", specifier = ">=1.11.0" },
-    { name = "snapbase", directory = "../../python" },
+    { name = "snapbase", directory = "../../../python" },
     { name = "streamlit", specifier = ">=1.28.0" },
 ]
 
@@ -615,8 +615,8 @@ wheels = [
 
 [[package]]
 name = "snapbase"
-version = "0.1.2"
-source = { directory = "../../python" }
+version = "0.1.4"
+source = { directory = "../../../python" }
 dependencies = [
     { name = "pandas" },
     { name = "polars", extra = ["pyarrow"] },
