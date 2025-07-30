@@ -652,7 +652,7 @@ pub extern "system" fn Java_com_snapbase_SnapbaseWorkspace_nativeCreateSnapshot<
     if snapshot_exists {
         let _ = env.throw_new(
             "com/snapbase/SnapbaseException",
-            format!("Snapshot '{}' already exists. Use a different name or remove the existing snapshot.", snapshot_name),
+            format!("Snapshot '{snapshot_name}' already exists. Use a different name or remove the existing snapshot."),
         );
         return std::ptr::null_mut();
     }

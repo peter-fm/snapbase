@@ -1512,7 +1512,6 @@ impl DataProcessor {
         let rows = stmt.query_map([], |row| {
             let column_count = row.as_ref().column_count();
             let mut string_row = Vec::with_capacity(column_count);
-            
             for i in 0..column_count {
                 let value: String = match row.get_ref(i)? {
                     duckdb::types::ValueRef::Null => String::new(),

@@ -1396,12 +1396,12 @@ fn show_config_with_resolution(
         println!("Configuration Resolution:");
         println!("  Source: {}", resolution_info.config_source);
         if let Some(config_path) = &resolution_info.config_path {
-            println!("  Config file: {}", config_path);
+            println!("  Config file: {config_path}");
         } else {
             println!("  Config file: <none - using defaults>");
         }
         if let Some(workspace_path) = &resolution_info.workspace_path {
-            println!("  Workspace: {}", workspace_path);
+            println!("  Workspace: {workspace_path}");
         }
 
         println!("\nResolution order (first found wins):");

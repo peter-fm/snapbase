@@ -35,7 +35,7 @@ impl PathResolver {
     /// A new PathResolver with absolute paths set up correctly
     pub fn new(workspace_root: PathBuf) -> Result<Self, SnapbaseError> {
         let current_working_dir = std::env::current_dir().map_err(|e| {
-            SnapbaseError::invalid_input(&format!("Cannot get current directory: {}", e))
+            SnapbaseError::invalid_input(format!("Cannot get current directory: {e}"))
         })?;
 
         // Always ensure workspace_root is absolute
@@ -108,8 +108,7 @@ impl PathResolver {
     /// Relative path string for use with storage backend (e.g., "sources/file.csv/snapshot_name=v1/snapshot_timestamp=20240101T120000Z")
     pub fn get_hive_path(&self, source_name: &str, snapshot_name: &str, timestamp: &str) -> String {
         format!(
-            "sources/{}/snapshot_name={}/snapshot_timestamp={}",
-            source_name, snapshot_name, timestamp
+            "sources/{source_name}/snapshot_name={snapshot_name}/snapshot_timestamp={timestamp}"
         )
     }
 

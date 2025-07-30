@@ -815,8 +815,7 @@ pub fn get_config_resolution_info(
     // Check resolution order
     if let Ok(env_config) = std::env::var("SNAPBASE_CONFIG") {
         resolution_order.push(format!(
-            "SNAPBASE_CONFIG environment variable: {}",
-            env_config
+            "SNAPBASE_CONFIG environment variable: {env_config}"
         ));
         if std::path::Path::new(&env_config).exists() {
             config_source = "environment_variable".to_string();

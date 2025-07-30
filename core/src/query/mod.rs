@@ -196,22 +196,19 @@ pub fn execute_query_with_describe(connection: &Connection, sql: &str) -> Result
                     Ok(duckdb::types::Value::Blob(b)) => {
                         QueryValue::String(format!("BLOB({} bytes)", b.len()))
                     }
-                    Ok(duckdb::types::Value::Date32(d)) => {
-                        QueryValue::String(format!("Date({})", d))
-                    }
+                    Ok(duckdb::types::Value::Date32(d)) => QueryValue::String(format!("Date({d})")),
                     Ok(duckdb::types::Value::Time64(t, _)) => {
-                        QueryValue::String(format!("Time({:?})", t))
+                        QueryValue::String(format!("Time({t:?})"))
                     }
                     Ok(duckdb::types::Value::Timestamp(ts, _)) => {
-                        QueryValue::String(format!("Timestamp({:?})", ts))
+                        QueryValue::String(format!("Timestamp({ts:?})"))
                     }
                     Ok(duckdb::types::Value::Interval {
                         months,
                         days,
                         nanos,
                     }) => QueryValue::String(format!(
-                        "Interval({} months, {} days, {} nanos)",
-                        months, days, nanos
+                        "Interval({months} months, {days} days, {nanos} nanos)"
                     )),
                     Ok(duckdb::types::Value::Decimal(d)) => QueryValue::String(d.to_string()),
                     Ok(duckdb::types::Value::Enum(s)) => QueryValue::String(s),
@@ -228,7 +225,7 @@ pub fn execute_query_with_describe(connection: &Connection, sql: &str) -> Result
                         QueryValue::String(format!("Array({} items)", a.len()))
                     }
                     Ok(duckdb::types::Value::Union(u)) => {
-                        QueryValue::String(format!("Union({:?})", u))
+                        QueryValue::String(format!("Union({u:?})"))
                     }
                     Err(_) => QueryValue::Null,
                 };
