@@ -1,10 +1,6 @@
-# Snapbase
-
 <img src="static/logo.jpg" alt="Snapbase Logo" width="400">
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-[![Latest Release](https://img.shields.io/github/v/release/peter-fm/snapbase?label=latest%20release)](https://github.com/peter-fm/snapbase/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Latest Release](https://img.shields.io/github/v/release/peter-fm/snapbase?label=latest%20release)](https://github.com/peter-fm/snapbase/releases/latest)
 
 A queryable time machine for your structured data from entire databases and SQL query results to Excel, CSV, parquet and JSON files. Snapbase is a data version control system augmented by SQL. Supports both local and cloud snapshot storage.
 
