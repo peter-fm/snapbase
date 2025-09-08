@@ -84,7 +84,7 @@ impl DataProcessor {
     }
 
     /// Extract timestamp value from DuckDB ValueRef, with special handling for MySQL datetime
-    fn extract_timestamp_value(value_ref: &duckdb::types::ValueRef, database_type: &Option<DatabaseType>) -> String {
+    pub fn extract_timestamp_value(value_ref: &duckdb::types::ValueRef, database_type: &Option<DatabaseType>) -> String {
         match value_ref {
             duckdb::types::ValueRef::Timestamp(unit, ts) => {
                 match unit {
@@ -136,6 +136,87 @@ impl DataProcessor {
             _ => {
                 // For any other types, convert to string as simply as possible
                 String::new()
+            }
+        }
+    }
+
+    /// Extract timestamp value from DuckDB Value (not ValueRef), for use in query engine
+    pub fn extract_timestamp_from_value(value: &duckdb::types::Value, _database_type: &Option<DatabaseType>) -> String {
+        match value {
+            duckdb::types::Value::Timestamp(unit, ts) => {
+                // Use the same logic as the ValueRef version but with proper parameter handling
+                match unit {
+                    duckdb::types::TimeUnit::Microsecond => {
+                        // Check if this is a valid timestamp value
+                        if *ts > 0 && *ts < i64::MAX {
+                            let seconds = ts / 1_000_000;
+                            let microseconds = ts % 1_000_000;
+                            if let Some(datetime) = chrono::DateTime::from_timestamp(seconds, (microseconds * 1000) as u32) {
+                                if microseconds > 0 {
+                                    datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string()
+                                } else {
+                                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                                }
+                            } else {
+                                // If we can't parse as proper datetime, return the raw timestamp value
+                                ts.to_string()
+                            }
+                        } else if *ts == 0 {
+                            // Zero timestamp - likely represents epoch or NULL datetime
+                            "1970-01-01 00:00:00".to_string()
+                        } else {
+                            // Negative or invalid timestamp - preserve as string
+                            ts.to_string()
+                        }
+                    }
+                    _ => {
+                        // For other time units, preserve the timestamp value
+                        if let Some(datetime) = chrono::DateTime::from_timestamp(*ts, 0) {
+                            datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                        } else {
+                            // Preserve the timestamp value
+                            ts.to_string()
+                        }
+                    }
+                }
+            }
+            _ => {
+                // For other value types, return string representation
+                format!("{:?}", value)
+            }
+        }
+    }
+
+    /// Extract date value from DuckDB Date32 value
+    pub fn extract_date_from_value(days: i32) -> String {
+        // Convert days since epoch to proper date format
+        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        if let Some(date) = epoch.checked_add_days(chrono::Days::new(days as u64)) {
+            date.format("%Y-%m-%d").to_string()
+        } else {
+            // If we can't parse the date, return the raw value
+            days.to_string()
+        }
+    }
+
+    /// Extract time value from DuckDB Time64 value
+    pub fn extract_time_from_value(time_value: i64, unit: &duckdb::types::TimeUnit) -> String {
+        match unit {
+            duckdb::types::TimeUnit::Microsecond => {
+                let total_seconds = time_value / 1_000_000;
+                let hours = total_seconds / 3600;
+                let minutes = (total_seconds % 3600) / 60;
+                let seconds = total_seconds % 60;
+                let microseconds = time_value % 1_000_000;
+                if microseconds > 0 {
+                    format!("{hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}")
+                } else {
+                    format!("{hours:02}:{minutes:02}:{seconds:02}")
+                }
+            }
+            _ => {
+                // For other time units, return the raw value
+                time_value.to_string()
             }
         }
     }

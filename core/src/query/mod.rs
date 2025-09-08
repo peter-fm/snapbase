@@ -1,5 +1,6 @@
 //! SQL Query Engine for historical snapshot analysis
 
+use crate::data::DataProcessor;
 use crate::error::{Result, SnapbaseError};
 use crate::workspace::SnapbaseWorkspace;
 use arrow::compute::concat_batches;
@@ -196,12 +197,14 @@ pub fn execute_query_with_describe(connection: &Connection, sql: &str) -> Result
                     Ok(duckdb::types::Value::Blob(b)) => {
                         QueryValue::String(format!("BLOB({} bytes)", b.len()))
                     }
-                    Ok(duckdb::types::Value::Date32(d)) => QueryValue::String(format!("Date({d})")),
-                    Ok(duckdb::types::Value::Time64(t, _)) => {
-                        QueryValue::String(format!("Time({t:?})"))
+                    Ok(duckdb::types::Value::Date32(d)) => {
+                        QueryValue::String(DataProcessor::extract_date_from_value(d))
+                    },
+                    Ok(duckdb::types::Value::Time64(unit, t)) => {
+                        QueryValue::String(DataProcessor::extract_time_from_value(t, &unit))
                     }
-                    Ok(duckdb::types::Value::Timestamp(ts, _)) => {
-                        QueryValue::String(format!("Timestamp({ts:?})"))
+                    Ok(value @ duckdb::types::Value::Timestamp(_, _)) => {
+                        QueryValue::String(DataProcessor::extract_timestamp_from_value(&value, &None))
                     }
                     Ok(duckdb::types::Value::Interval {
                         months,
