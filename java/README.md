@@ -27,25 +27,25 @@ Java bindings for Snapbase - a queryable time machine for your structured data f
 1. **Download the fat JAR** for your platform (contains platform-specific native libraries):
    ```bash
    # Linux x86_64
-   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-linux-x86_64-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-linux-x86_64-v0.1.7.jar -o snapbase-java-0.1.7.jar
    
    # Linux ARM64
-   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-linux-arm64-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-linux-x86_64-v0.1.7.jar -o snapbase-java-0.1.7.jar
    
    # macOS Apple Silicon
-   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-macos-apple-silicon-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-macos-apple-silicon-v0.1.7.jar -o snapbase-java-0.1.7.jar
    
    # macOS Intel
-   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-macos-intel-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-macos-apple-silicon-v0.1.7.jar -o snapbase-java-0.1.7.jar
    
    # Windows x86_64
-   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-windows-x86_64-v0.1.5.jar -o snapbase-java-0.1.5.jar
+   curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-java-windows-x86_64-v0.1.7.jar -o snapbase-java-0.1.7.jar
    ```
 
 2. **Install to your local Maven repository**:
    ```bash
    mvn install:install-file \
-     -Dfile=snapbase-java-0.1.5.jar \
+     -Dfile=snapbase-java-0.1.7.jar \
      -DgroupId=com.snapbase \
      -DartifactId=snapbase-java \
      -Dversion=0.1.5 \
@@ -57,7 +57,7 @@ Java bindings for Snapbase - a queryable time machine for your structured data f
    <dependency>
        <groupId>com.snapbase</groupId>
        <artifactId>snapbase-java</artifactId>
-       <version>0.1.5</version>
+       <version>0.1.7</version>
    </dependency>
    ```
 
@@ -110,7 +110,7 @@ All Snapbase Java applications need these JVM flags:
 <plugin>
     <groupId>org.codehaus.mojo</groupId>
     <artifactId>exec-maven-plugin</artifactId>
-    <version>3.1.0</version>
+    <version>0.1.7</version>
     <configuration>
         <mainClass>com.example.MyApp</mainClass>
         <args>
@@ -138,7 +138,7 @@ All Snapbase Java applications need these JVM flags:
 ```bash
 java --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED \
      --enable-native-access=ALL-UNNAMED \
-     -cp your-app.jar:snapbase-java-0.1.5.jar \
+     -cp your-app.jar:snapbase-java-0.1.7.jar \
      com.example.MyApp
 ```
 
@@ -183,7 +183,7 @@ java --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED \
 FROM openjdk:11-jre-slim
 
 COPY your-app.jar /app/app.jar
-COPY snapbase-java-0.1.5.jar /app/lib/
+COPY snapbase-java-0.1.7.jar /app/lib/
 
 ENTRYPOINT ["java", \
     "--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED", \

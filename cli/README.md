@@ -22,35 +22,35 @@ Download the latest release for your platform:
 
 #### Linux (x86_64)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-x86_64-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-x86_64-v0.1.7 -o snapbase
 chmod +x snapbase
 sudo mv snapbase /usr/local/bin/
 ```
 
 #### Linux (ARM64)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-arm64-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-x86_64-v0.1.7 -o snapbase
 chmod +x snapbase
 sudo mv snapbase /usr/local/bin/
 ```
 
 #### macOS (Apple Silicon)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-apple-silicon-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-apple-silicon-v0.1.7 -o snapbase
 chmod +x snapbase
 sudo mv snapbase /usr/local/bin/
 ```
 
 #### macOS (Intel)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-intel-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-apple-silicon-v0.1.7 -o snapbase
 chmod +x snapbase
 sudo mv snapbase /usr/local/bin/
 ```
 
 #### Windows (x86_64)
 ```bash
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-windows-x86_64-v0.1.5.exe -o snapbase.exe
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-windows-x86_64-v0.1.7.exe -o snapbase.exe
 # Add snapbase.exe to your PATH
 ```
 

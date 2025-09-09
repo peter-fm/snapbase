@@ -4,6 +4,7 @@ use crate::error::{Result, SnapbaseError};
 use crate::workspace::SnapbaseWorkspace;
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
+use chrono::DateTime;
 use duckdb::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -200,8 +201,40 @@ pub fn execute_query_with_describe(connection: &Connection, sql: &str) -> Result
                     Ok(duckdb::types::Value::Time64(t, _)) => {
                         QueryValue::String(format!("Time({t:?})"))
                     }
-                    Ok(duckdb::types::Value::Timestamp(ts, _)) => {
-                        QueryValue::String(format!("Timestamp({ts:?})"))
+                    Ok(duckdb::types::Value::Timestamp(unit, timestamp_value)) => {
+                        // Convert DuckDB timestamp to proper datetime string
+                        match unit {
+                            duckdb::types::TimeUnit::Microsecond => {
+                                // timestamp_value is i64 representing microseconds since epoch
+                                if timestamp_value > 0 && timestamp_value < i64::MAX {
+                                    let seconds = timestamp_value / 1_000_000;
+                                    let microseconds = timestamp_value % 1_000_000;
+                                    if let Some(datetime) = DateTime::from_timestamp(seconds, (microseconds * 1000) as u32) {
+                                        if microseconds > 0 {
+                                            QueryValue::String(datetime.format("%Y-%m-%d %H:%M:%S.%6f").to_string())
+                                        } else {
+                                            QueryValue::String(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
+                                        }
+                                    } else {
+                                        QueryValue::String(format!("Invalid Timestamp({timestamp_value})"))
+                                    }
+                                } else if timestamp_value == 0 {
+                                    // Zero timestamp - likely represents epoch
+                                    QueryValue::String("1970-01-01 00:00:00".to_string())
+                                } else {
+                                    // Negative or invalid timestamp - preserve as string
+                                    QueryValue::String(timestamp_value.to_string())
+                                }
+                            }
+                            _ => {
+                                // For other time units, use a simpler approach
+                                if let Some(datetime) = DateTime::from_timestamp(timestamp_value, 0) {
+                                    QueryValue::String(datetime.format("%Y-%m-%d %H:%M:%S").to_string())
+                                } else {
+                                    QueryValue::String(format!("Timestamp({timestamp_value:?}, {unit:?})"))
+                                }
+                            }
+                        }
                     }
                     Ok(duckdb::types::Value::Interval {
                         months,

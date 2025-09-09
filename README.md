@@ -37,23 +37,23 @@ Java API with native performance through JNI bindings.
 ### CLI Installation
 ```bash
 # From GitHub releases - Linux (x86_64)
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-x86_64-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-x86_64-v0.1.7 -o snapbase
 chmod +x snapbase && sudo mv snapbase /usr/local/bin/
 
 # From GitHub releases - Linux (ARM64)
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-arm64-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-linux-x86_64-v0.1.7 -o snapbase
 chmod +x snapbase && sudo mv snapbase /usr/local/bin/
 
 # From GitHub releases - macOS (Apple Silicon)
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-apple-silicon-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-apple-silicon-v0.1.7 -o snapbase
 chmod +x snapbase && sudo mv snapbase /usr/local/bin/
 
 # From GitHub releases - macOS (Intel)
-curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-intel-v0.1.5 -o snapbase
+curl -L https://github.com/peter-fm/snapbase/releases/latest/download/snapbase-macos-apple-silicon-v0.1.7 -o snapbase
 chmod +x snapbase && sudo mv snapbase /usr/local/bin/
 
 # From GitHub releases - Windows
-# Download snapbase-windows-x86_64-v0.1.5.exe from releases page
+# Download snapbase-windows-x86_64-v0.1.7.exe from releases page
 
 # From source
 cargo install --git https://github.com/peter-fm/snapbase.git
@@ -69,7 +69,7 @@ uv add "git+https://github.com/peter-fm/snapbase.git@main#subdirectory=python"
 <dependency>
     <groupId>com.snapbase</groupId>
     <artifactId>snapbase-java</artifactId>
-    <version>0.1.5</version>
+    <version>0.1.7</version>
 </dependency>
 ```
 
